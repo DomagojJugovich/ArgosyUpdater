@@ -19,9 +19,6 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 
-//TODO debud DB, debug delete, CREATE SHORTUC desktop
-//run HINT fpr folder pairs
-//version HINT
 
 namespace ArgosyUpdater
 {
@@ -74,7 +71,6 @@ namespace ArgosyUpdater
                     {
                     new MenuItem("CHECK NOW", new EventHandler(MenuCheckNow)),
                     new MenuItem("OPEN SYNC FOLDER", new EventHandler(MenuOpen)),
-                    new MenuItem("OPEN APP", new EventHandler(MenuOpenApp)),
                     new MenuItem("SETTINGS", new EventHandler(MenuSettings)),
                     new MenuItem("OPEN LOG FOLDER", new EventHandler(MenuOpenLogFolder)),
                     new MenuItem("EXIT", new EventHandler(MenuExit))
@@ -340,19 +336,6 @@ namespace ArgosyUpdater
             Process.Start(processStartInfo);
         }
 
-        private static void MenuOpenApp(object sender, EventArgs e)
-        {
-            string[] strArray = new string[localPath.Count];
-            localPath.CopyTo(strArray, 0);
-
-            ProcessStartInfo processStartInfo = new ProcessStartInfo();
-            processStartInfo.FileName = "powershell.exe";
-            processStartInfo.Arguments = "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -file \"ArgosyBoot.ps1\" -ExedirName \"EXEDIR\"";
-            var ret = SelectCombo(strArray);
-            if (ret != null) { processStartInfo.WorkingDirectory = ret; }
-            else { return; }
-            Process.Start(processStartInfo);
-        }
         private static void MenuCheckNow(object sender, EventArgs e)
         {
             CheckNetworkShare(null,null);
@@ -579,22 +562,43 @@ namespace ArgosyUpdater
                             connection.Open();
                             reader = command.ExecuteReader();
 
-                            if (reader.HasRows)  //update --------------------
+                            bool machineExixts = false;
+                            if (reader.HasRows)  { machineExixts = true; }
+                            reader.Close();
+
+                            string ipAdrss = "";
+                            foreach (var ip in machine.AddressList) { ipAdrss = ipAdrss + ip.ToString() + " , ";  }
+                            ipAdrss = ipAdrss.Substring(0, ipAdrss.Length - 2); //remove last comma
+
+                            if (machineExixts)  //update --------------------
                             {
                                 SqlCommand commandU = new SqlCommand(updateStrig, connection);
-                                commandU.Parameters.AddWithValue("@IPadress", machine.AddressList.ToString());
+                                commandU.Parameters.AddWithValue("@IPadress", ipAdrss);
                                 commandU.Parameters.AddWithValue("@UserName", System.Security.Principal.WindowsIdentity.GetCurrent().Name);
                                 commandU.Parameters.AddWithValue("@LastSync", now);
-                                commandU.Parameters.AddWithValue("@AppFolderVersions", versions);
-                                commandU.Parameters.AddWithValue("@LogChanges", changes);
-                                commandU.Parameters.AddWithValue("@LogErrors", errors);
+                                commandU.Parameters.AddWithValue("@AppFolderVersions", versions.ToString());
+                                commandU.Parameters.AddWithValue("@LogChanges", changes.ToString());
+                                commandU.Parameters.AddWithValue("@LogErrors", errors.ToString());
                                 commandU.Parameters.AddWithValue("@UpdaterTerminalError", "");
                                 commandU.Parameters.AddWithValue("@MachineNameWhere", machine.HostName.Trim());
+
+                                commandU.ExecuteNonQuery();
 
 
                             }
                             else //insert ----------------------------------
                             {
+                                SqlCommand commandI = new SqlCommand(insertStrig, connection);
+                                commandI.Parameters.AddWithValue("@MachineName", machine.HostName.Trim());
+                                commandI.Parameters.AddWithValue("@IPadress", ipAdrss);
+                                commandI.Parameters.AddWithValue("@UserName", System.Security.Principal.WindowsIdentity.GetCurrent().Name);
+                                commandI.Parameters.AddWithValue("@LastSync", now);
+                                commandI.Parameters.AddWithValue("@AppFolderVersions", versions.ToString());
+                                commandI.Parameters.AddWithValue("@LogChanges", changes.ToString());
+                                commandI.Parameters.AddWithValue("@LogErrors", errors.ToString());
+                                commandI.Parameters.AddWithValue("@UpdaterTerminalError", "");
+
+                                commandI.ExecuteNonQuery();
 
                             }
 
@@ -605,8 +609,7 @@ namespace ArgosyUpdater
                         }
                         finally
                         {
-                            // Always call Close when done reading.
-                            if (reader!=null) reader.Close();
+                            connection.Close();
                         }
                         return;
                     }
