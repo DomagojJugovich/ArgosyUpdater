@@ -73,5 +73,15 @@ namespace ArgosyUpdater.Properties {
                 return ((int)(this["TimerInterval"]));
             }
         }
+        
+        [global::System.Configuration.ApplicationScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("Initial Catalog=XArgosyUpdater;Data Source=SQL-DEVELOPER;User Id=lauscc;Password=" +
+            "berlin;")]
+        public string ConnectionString {
+            get {
+                return ((string)(this["ConnectionString"]));
+            }
+        }
     }
 }

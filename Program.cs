@@ -1,8 +1,10 @@
 ﻿using ArgosyUpdater.Properties;
+using CSScriptLibrary;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Text;
@@ -15,6 +17,11 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+
+
+//TODO debud DB, debug delete, CREATE SHORTUC desktop
+//run HINT fpr folder pairs
+//version HINT
 
 namespace ArgosyUpdater
 {
@@ -29,6 +36,8 @@ namespace ArgosyUpdater
         static bool thereWereChanges = false;
         static System.Collections.Specialized.StringCollection networkShare;
         static System.Collections.Specialized.StringCollection localPath;
+
+        static string connectionString;
 
         static string programData;
 
@@ -64,10 +73,10 @@ namespace ArgosyUpdater
                     ContextMenu = new ContextMenu(new MenuItem[]
                     {
                     new MenuItem("CHECK NOW", new EventHandler(MenuCheckNow)),
-                    new MenuItem("OPEN FOLDER", new EventHandler(MenuOpen)),
+                    new MenuItem("OPEN SYNC FOLDER", new EventHandler(MenuOpen)),
                     new MenuItem("OPEN APP", new EventHandler(MenuOpenApp)),
                     new MenuItem("SETTINGS", new EventHandler(MenuSettings)),
-                    new MenuItem("CHECK NOW AND DOWNLOAD ALL", new EventHandler(MenuCheckNowReset)),
+                    new MenuItem("OPEN LOG FOLDER", new EventHandler(MenuOpenLogFolder)),
                     new MenuItem("EXIT", new EventHandler(MenuExit))
                     }),
                     Text = Properties.Settings.Default.TrayIconText,
@@ -136,7 +145,7 @@ namespace ArgosyUpdater
                 //copy files
                 string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
                 DirectoryInfo di = new DirectoryInfo(strExeFilePath);
-                FileInfo[] files = di.GetFiles("ArgosyUpdater*.*");
+                FileInfo[] files = di.GetFiles("*.*");
 
                 foreach (FileInfo file in files)
                 {
@@ -207,9 +216,19 @@ namespace ArgosyUpdater
             // Local download path
             localPath = Properties.Settings.Default.LocalPath;
 
-            if (localPath==null || networkShare==null)
+
+            if (localPath==null || networkShare==null )
             {
                 trayIcon.ShowBalloonTip(3000, "Setting errors", "Setting/paths are empty !", ToolTipIcon.Error);
+                Environment.Exit(-1);
+            }
+
+
+            //check is there same number of entrys
+            int cnt = networkShare.Count;
+            if (localPath.Count != cnt )
+            {
+                trayIcon.ShowBalloonTip(3000, "Setting errors", "Not same number of entrys in string collection !", ToolTipIcon.Error);
                 Environment.Exit(-1);
             }
 
@@ -224,6 +243,7 @@ namespace ArgosyUpdater
                 trayIcon.ShowBalloonTip(3000, "Setting errors", "TimerInterval is less that 30 sec !", ToolTipIcon.Error);
                 Environment.Exit(-1);
             }
+
         }
 
         private static void MakeRunningCopy()
@@ -233,7 +253,7 @@ namespace ArgosyUpdater
             {
                 string strExeFilePath = Path.GetDirectoryName(exeName);
                 DirectoryInfo di = new DirectoryInfo(strExeFilePath);
-                FileInfo[] files = di.GetFiles("ArgosyUpdater*.*");
+                FileInfo[] files = di.GetFiles("*.*");
 
                 foreach (FileInfo file in files)
                 {
@@ -338,10 +358,12 @@ namespace ArgosyUpdater
             CheckNetworkShare(null,null);
         }
 
-        private static void MenuCheckNowReset(object sender, EventArgs e)
+        private static void MenuOpenLogFolder(object sender, EventArgs e)
         {
-            File.Delete(Path.Combine(programData, "lastSync.txt"));
-            CheckNetworkShare(null, null);
+            ProcessStartInfo processStartInfo = new ProcessStartInfo();
+            processStartInfo.FileName = "explorer.exe";
+            processStartInfo.Arguments = programData;
+            Process.Start(processStartInfo);
         }
 
 
@@ -374,7 +396,9 @@ namespace ArgosyUpdater
             {
                 StringBuilder errors = new StringBuilder();
                 StringBuilder changes = new StringBuilder();
-                 
+                StringBuilder versions = new StringBuilder();
+
+
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterBusy.ico");
 
                 //last Sync 
@@ -386,19 +410,20 @@ namespace ArgosyUpdater
 
                 var netShEnum = networkShare.GetEnumerator();
                 var locFolEnum = localPath.GetEnumerator();
-    
+
+
                 while (netShEnum.MoveNext())
                 {
                     locFolEnum.MoveNext();
                     string locFolCurr = locFolEnum.Current;
                     string netShCurr = netShEnum.Current;
+                    
                     //this sync root folder end subfolders/files
                     DirectoryCopy(netShCurr, locFolCurr, errors, changes);
-                    //DirectoryClean(netShCurr, locFolCurr, errors, changes);
+                    DirectoryClean(netShCurr, locFolCurr, errors, changes);
+                    DoScripts(errors, versions, locFolCurr);
+
                 }
-
-
-                SaveLastSync(errors); //zbog novog nacine usporedbe maltene nepotrebno
 
 
                 if (errors.Length > 0)
@@ -411,19 +436,33 @@ namespace ArgosyUpdater
                 else
                 {
                     thereWereErros = false;
-
-                    if (changes.Length > 0)
-                    {
-                        thereWereChanges = true;
-                        string changeFile = Path.Combine(programData, "SyncChanges.txt");
-                        File.WriteAllText(changeFile, changes.ToString());
-                        trayIcon.ShowBalloonTip(3000, "New Version", "New version of Argosy has been downloaded.", ToolTipIcon.Info);
-                    }
-                    else
-                    {
-                        thereWereChanges = false;
-                    }
                 }
+
+                if (changes.Length > 0)
+                {
+                    thereWereChanges = true;
+                    string changeFile = Path.Combine(programData, "SyncChanges.txt");
+                    File.WriteAllText(changeFile, changes.ToString());
+                    trayIcon.ShowBalloonTip(3000, "New Version", "New version of APP(s) has been downloaded." + Environment.NewLine + versions, ToolTipIcon.Info);
+
+                    if (versions.Length > 0)
+                    {
+                        string versionFile = Path.Combine(programData, "Versions.txt");
+                        File.WriteAllText(versionFile, versions.ToString());
+                    }
+
+                }
+                else
+                {
+                    thereWereChanges = false;
+                }
+
+
+                DateTime now = SaveLastSync(errors); //zbog novog nacine usporedbe maltene nepotrebno
+
+                if (thereWereChanges || thereWereErros) { UpdateDb(errors, changes, versions, now); }
+                
+
             }
             catch (Exception ex)
             {
@@ -432,6 +471,151 @@ namespace ArgosyUpdater
                 trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
             } finally {
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdater.ico");
+            }
+        }
+
+        private static void DoScripts(StringBuilder errors, StringBuilder versions, string locFolCurr)
+        {
+            try {
+                string scriptPath = Path.Combine(locFolCurr, "_scripts");
+                if (!Directory.Exists(scriptPath)) { return; }
+                scriptPath = Path.Combine(scriptPath, "ArgCScript.cs");     //CONVENTION !!!!
+                if (!File.Exists(scriptPath)) { return; }
+                string script = File.ReadAllText(scriptPath); 
+                dynamic dynObject = CSScript.LoadCode(script).CreateObject("*");
+                versions.AppendLine( dynObject.GetVersion(locFolCurr) );
+
+                //shortcut
+                if (HasMethod(dynObject, "GetExeForShortcut"))
+                {
+                    string[] shResult = dynObject.GetExeForShortcut(locFolCurr);
+                    string exePath = shResult[0];
+                    string shName = shResult[1];
+                    string iconPath = shResult[2];
+                    string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), shName + ".lnk");
+                    string fullExe = Path.Combine(appPath, "ArgosyUpdater.exe");
+                    string startIn = Path.GetDirectoryName(exePath);
+                    Extensions.XShortCut.Create(desktopLink, exePath, startIn, shName, iconPath);
+                }
+
+                //after sync
+                if (HasMethod(dynObject, "AfterSync")) { dynObject.AfterSync(locFolCurr); }
+
+
+            } catch (Exception ex)
+            {
+                AddError(ex, errors, locFolCurr);
+            }
+        }
+
+        public static bool HasMethod(this object objectToCheck, string methodName)
+        {
+            var type = objectToCheck.GetType();
+            return type.GetMethod(methodName) != null;
+        }
+
+
+        private static void UpdateDb(StringBuilder errors, StringBuilder changes, StringBuilder versions, DateTime now)
+        {
+            try
+            {
+                if (!String.IsNullOrEmpty(Properties.Settings.Default.ConnectionString))
+                {
+                    string connectionString = Properties.Settings.Default.ConnectionString;
+
+                    string queryString = @"SELECT [MachineName]
+      ,[IPadress]
+      ,[UserName]
+      ,[LastSync]
+      ,[AppFolderVersions]
+      ,[LogChanges]
+      ,[LogErrors]
+      ,[UpdaterTerminalError]
+  FROM [dbo].[ArgosyUpdaterMachines]
+  WHERE [MachineName] = @machineName";
+
+                    string insertStrig = @"INSERT INTO [dbo].[ArgosyUpdaterMachines]
+           ([MachineName]
+           ,[IPadress]
+           ,[UserName]
+           ,[LastSync]
+           ,[AppFolderVersions]
+           ,[LogChanges]
+           ,[LogErrors]
+           ,[UpdaterTerminalError])
+     VALUES
+           (@MachineName
+           ,@IPadress
+           ,@UserName
+           ,@LastSync
+           ,@AppFolderVersions
+           ,@LogChanges
+           ,@LogErrors
+           ,@UpdaterTerminalError)";
+
+
+                    string updateStrig = @"UPDATE [dbo].[ArgosyUpdaterMachines]
+   SET [IPadress] = @IPadress
+      ,[UserName] = @UserName
+      ,[LastSync] = @LastSync
+      ,[AppFolderVersions] = @AppFolderVersions
+      ,[LogChanges] = @LogChanges
+      ,[LogErrors] = @LogErrors
+      ,[UpdaterTerminalError] = @UpdaterTerminalError
+ WHERE MachineName = @MachineNameWhere";
+
+
+                    IPHostEntry machine = Dns.GetHostEntry(Environment.MachineName);
+                    if (machine == null) { return; }
+                    if (machine.HostName == null) { return; }
+
+                    using (SqlConnection connection = new SqlConnection(connectionString))
+                    {
+                        SqlDataReader reader=null;
+                        try
+                        {
+                            SqlCommand command = new SqlCommand(queryString, connection);
+                            command.Parameters.AddWithValue("@machineName", machine.HostName.Trim());
+                            connection.Open();
+                            reader = command.ExecuteReader();
+
+                            if (reader.HasRows)  //update --------------------
+                            {
+                                SqlCommand commandU = new SqlCommand(updateStrig, connection);
+                                commandU.Parameters.AddWithValue("@IPadress", machine.AddressList.ToString());
+                                commandU.Parameters.AddWithValue("@UserName", System.Security.Principal.WindowsIdentity.GetCurrent().Name);
+                                commandU.Parameters.AddWithValue("@LastSync", now);
+                                commandU.Parameters.AddWithValue("@AppFolderVersions", versions);
+                                commandU.Parameters.AddWithValue("@LogChanges", changes);
+                                commandU.Parameters.AddWithValue("@LogErrors", errors);
+                                commandU.Parameters.AddWithValue("@UpdaterTerminalError", "");
+                                commandU.Parameters.AddWithValue("@MachineNameWhere", machine.HostName.Trim());
+
+
+                            }
+                            else //insert ----------------------------------
+                            {
+
+                            }
+
+                            //while (reader.Read())
+                            //{
+                            //    if (reader.GetString( "MachineName"] Trim() == machine.HostName.Trim())
+                            //}
+                        }
+                        finally
+                        {
+                            // Always call Close when done reading.
+                            if (reader!=null) reader.Close();
+                        }
+                        return;
+                    }
+                }
+            } catch (Exception ex)
+            {
+                string errorFile = Path.Combine(programData, "DbError.txt");
+                File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
+                return;
             }
         }
 
@@ -458,20 +642,23 @@ namespace ArgosyUpdater
             }
         }
 
-        private static void SaveLastSync(StringBuilder errors)
+        private static DateTime SaveLastSync(StringBuilder errors)
         {
             string lastSyncFile = Path.Combine(programData, "lastSync.txt");
+            DateTime dateTime = DateTime.Now;
 
             try
             {
                 if (File.Exists(lastSyncFile))  { File.Delete(lastSyncFile); }
-                File.WriteAllText(lastSyncFile, DateTime.Now.ToString());
+                File.WriteAllText(lastSyncFile, dateTime.ToString());
 
             }
             catch (Exception ex)
             {
                 AddError(ex, errors, lastSyncFile);
             }
+
+            return dateTime;
         }
 
         private static void BalloonTip_Click(object sender, EventArgs e)
@@ -497,58 +684,71 @@ namespace ArgosyUpdater
 
         private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes)
         {
-            // Get the subdirectories for the specified directory.
-            DirectoryInfo dir = new DirectoryInfo(sourceDirName);
-
-            //If the destination directory doesn't exist, create it.
-            if (!Directory.Exists(destDirName))
+            try
             {
-                try
+                // Get the subdirectories for the specified directory.
+                DirectoryInfo dir = new DirectoryInfo(sourceDirName);
+
+                //If the destination directory doesn't exist, create it.
+                if (!Directory.Exists(destDirName))
                 {
-                    changes.AppendLine("CREATE DIR : " + destDirName);
-                    Directory.CreateDirectory(destDirName);
-                } catch (Exception ex) {
-                    AddError(ex, errors, destDirName);
-                    return;
+               
+                        changes.AppendLine("CREATE DIR : " + destDirName);
+                        Directory.CreateDirectory(destDirName);
+               
                 }
-            }
-            //Get the files in the directory and copy them to the new location.
-            FileInfo[] files = dir.GetFiles();
-            foreach (FileInfo file in files)
-            {
-                string temppath="";
-                try
-                {
-                    temppath = Path.Combine(destDirName, file.Name);
 
-                    if (File.Exists(temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
+                //Get the files in the directory and copy them to the new location.
+                FileInfo[] files = dir.GetFiles();
+                foreach (FileInfo file in files)
+                {
+                    string temppath="";
+                    try
                     {
-                        if (file.LastWriteTime > File.GetLastWriteTime(temppath))
+                        temppath = Path.Combine(destDirName, file.Name);
+
+                        if (File.Exists(temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
                         {
-                            changes.AppendLine("COPY NEWER FILE : " + temppath);
+                            if (file.LastWriteTime > File.GetLastWriteTime(temppath))
+                            {
+                                changes.AppendLine("COPY NEWER FILE : " + temppath);
+                                file.CopyTo(temppath, true);
+                                //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
+                            }
+                        }
+                        else //ima samo na shareu dakle kopiraj bez provjere
+                        {
+                            changes.AppendLine("COPY MISSING FILE : " + temppath);
                             file.CopyTo(temppath, true);
-                            //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
                         }
                     }
-                    else //ima samo na shareu dakle kopiraj bez provjere
+                    catch (Exception ex)
                     {
-                        changes.AppendLine("COPY MISSING FILE : " + temppath);
-                        file.CopyTo(temppath, true);
+                        AddError(ex, errors, temppath);
+                        continue;
                     }
                 }
-                catch (Exception ex)
+
+                //copy subdirectories also , copy them and their contents to new location.
+                DirectoryInfo[] dirs = dir.GetDirectories();
+                foreach (DirectoryInfo subdir in dirs)
                 {
-                    AddError(ex, errors, temppath);
-                    continue;
+                    string temppath="";
+                    try { 
+                        temppath = Path.Combine(destDirName, subdir.Name);
+                        DirectoryCopy(subdir.FullName, temppath, errors, changes);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddError(ex, errors, temppath);
+                        continue;
+                    }
                 }
             }
-
-            //copy subdirectories also , copy them and their contents to new location.
-            DirectoryInfo[] dirs = dir.GetDirectories();
-            foreach (DirectoryInfo subdir in dirs)
+            catch (Exception ex)
             {
-               string temppath = Path.Combine(destDirName, subdir.Name);
-               DirectoryCopy(subdir.FullName, temppath, errors, changes);
+                AddError(ex, errors, destDirName);
+                return;
             }
         }
 
@@ -557,14 +757,6 @@ namespace ArgosyUpdater
             // Get the subdirectories for the specified directory.
             DirectoryInfo dir = new DirectoryInfo(destDirName);
 
-            //If the destination directory doesn't exist, create it.
-            if (!Directory.Exists(destDirName))
-            {
-                    return;
-            }
-
-            //TODO dalje s obratnom logikom
-
             //Get the files in the directory and copy them to the new location.
             FileInfo[] files = dir.GetFiles();
             foreach (FileInfo file in files)
@@ -572,36 +764,47 @@ namespace ArgosyUpdater
                 string temppath = "";
                 try
                 {
-                    temppath = Path.Combine(destDirName, file.Name);
+                    temppath = Path.Combine(sourceDirName, file.Name);
 
-                    if (File.Exists(temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
+                    if (!File.Exists(temppath)) //ako ne postoji na sourceu obrisi ju i lokalno
                     {
-                        if (file.LastWriteTime > File.GetLastWriteTime(temppath))
-                        {
-                            changes.AppendLine("COPY NEWER FILE : " + temppath);
-                            file.CopyTo(temppath, true);
-                            //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
-                        }
-                    }
-                    else //ima samo na shareu dakle kopiraj bez provjere
-                    {
-                        changes.AppendLine("COPY MISSING FILE : " + temppath);
-                        file.CopyTo(temppath, true);
+                         changes.AppendLine("DELETE MISSING FILE : " + file.FullName);
+                         file.Delete();
                     }
                 }
                 catch (Exception ex)
                 {
-                    AddError(ex, errors, temppath);
+                    AddError(ex, errors, file.FullName);
                     continue;
                 }
             }
 
-            //copy subdirectories also , copy them and their contents to new location.
+            //delete subdirectories also if missing
             DirectoryInfo[] dirs = dir.GetDirectories();
+
+            string temppathDir = "";
+
             foreach (DirectoryInfo subdir in dirs)
             {
-                string temppath = Path.Combine(destDirName, subdir.Name);
-                DirectoryClean(subdir.FullName, temppath, errors, changes);
+                try
+                {
+                    temppathDir = Path.Combine(sourceDirName, subdir.Name);
+
+                    if (!Directory.Exists(temppathDir)) //ako ne postoji na sourceu obrisi ju i lokalno
+                    {
+                        changes.AppendLine("DELETE MISSING FOLDER : " + subdir.FullName);
+                        subdir.Delete(true);
+                    } else
+                    {
+                        string temppathDirDest = Path.Combine(destDirName, subdir.Name);
+                        DirectoryClean(temppathDir, temppathDirDest, errors, changes);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddError(ex, errors, temppathDir);
+                    continue;
+                }
             }
         }
 

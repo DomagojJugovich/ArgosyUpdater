@@ -25,5 +25,8 @@
     <Setting Name="TimerInterval" Type="System.Int32" Scope="Application">
       <Value Profile="(Default)">1200</Value>
     </Setting>
+    <Setting Name="ConnectionString" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">Initial Catalog=XArgosyUpdater;Data Source=SQL-DEVELOPER;User Id=lauscc;Password=berlin;</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

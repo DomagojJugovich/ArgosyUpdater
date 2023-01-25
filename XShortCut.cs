@@ -26,5 +26,17 @@ namespace ArgosyUpdater.Extensions
             link.WorkingDirectory = startIn;
             link.Save();
         }
+
+        public static void Create(string fullPathToLink, string fullPathToTargetExe, string startIn, string description, string fullPathToIcon)
+        {
+            if (System.IO.File.Exists(fullPathToLink)) { System.IO.File.Delete(fullPathToLink); }
+            var shell = new WshShell();
+            var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink);
+            link.IconLocation = fullPathToIcon;
+            link.TargetPath = fullPathToTargetExe;
+            link.Description = description;
+            link.WorkingDirectory = startIn;
+            link.Save();
+        }
     }
 }
