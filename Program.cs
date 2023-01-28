@@ -11,6 +11,7 @@ using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -18,7 +19,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-
+//TODO finish commands, za lof u db changesa, ako bude ista osim RESTART-a, jer kako se gasio app nema slisla dalje ici za sada
 
 namespace ArgosyUpdater
 {
@@ -31,8 +32,7 @@ namespace ArgosyUpdater
         static DateTime lastSync = new DateTime(1979, 5, 19); //default
         static bool thereWereErros = false;
         static bool thereWereChanges = false;
-        static System.Collections.Specialized.StringCollection networkShare;
-        static System.Collections.Specialized.StringCollection localPath;
+        static Config conf = null;
 
         static string connectionString;
 
@@ -59,8 +59,9 @@ namespace ArgosyUpdater
                 //check is there running argosy updater allready
                 CheckOtherProcesses();
                 if (!debug) MakeRunningCopy(); //Exits here if this is not running copy
-                CheckSettings();
                 //CheckShortcut(); it is done in install
+
+                CheckSettings();
 
                 // Initialize tray icon
                 trayIcon = new NotifyIcon()
@@ -75,16 +76,17 @@ namespace ArgosyUpdater
                     new MenuItem("OPEN LOG FOLDER", new EventHandler(MenuOpenLogFolder)),
                     new MenuItem("EXIT", new EventHandler(MenuExit))
                     }),
-                    Text = Properties.Settings.Default.TrayIconText,
+                    Text = conf.settings.TrayIconText,
                     Visible = true
                 };
+
 
                 //after checks because therer is no point before
                 trayIcon.BalloonTipClicked += BalloonTip_Click;
 
                 // Initialize timer
                 timer = new System.Windows.Forms.Timer();
-                timer.Interval = Properties.Settings.Default.TimerInterval * 1000;
+                timer.Interval = conf.settings.TimerInterval * 1000;
                 timer.Tick += new EventHandler(CheckNetworkShare);
                 timer.Start();
 
@@ -109,37 +111,78 @@ namespace ArgosyUpdater
         private static void CheckArgs()
         {
             string[] args = Environment.GetCommandLineArgs();
+            bool restart = false;
+            bool keeplocalpaths = false;
+            bool install = false;
+            bool uninstall = false;
+
             if (args.Length > 0)
             {
                 foreach (string arg in args)
                 {
                     if (arg == "debug")
                     {
-                        debug= true;
+                        debug = true;
+                    }
+                    else if (arg == "restart")
+                    {
+                        restart = true;
+                    }
+                    else if (arg == "keeplocalpaths")
+                    {
+                        keeplocalpaths=true;
                     }
                     else if (arg == "install")
                     {
-                        InstallApp();
+                        install = true;
+                    }
+                    else if (arg == "uninstall")
+                    {
+                        uninstall = true;
                     }
                 }
+
+                if (install) { 
+                    InstallApp(restart, keeplocalpaths); 
+                } else if(uninstall)
+                {
+                    UnInstall();
+                }
+
+
+
             }
         }
 
-        private static void InstallApp()
+        private static void InstallApp(bool restart, bool keeplocalpaths)
         {
             try
             {
                 // no delete , it will be locked
-                //if (Directory.Exists(appPath))
-                //{
-                //    Console.WriteLine("Delete : " + appPath);
-                //    Directory.Delete(appPath, true);
-                //}
-                //Console.WriteLine("Create : " + appPath);
-                //Directory.CreateDirectory(appPath);
+                if (!Directory.Exists(appPath))
+                {
+                    Console.WriteLine("Create : " + appPath);
+                    Directory.CreateDirectory(appPath);
+                }
+
+                string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+                //preserve localpaths
+                Config confOld = null;
+                string fileNameJson = System.IO.Path.Combine(appPath, "AppSettings.json");
+                if (keeplocalpaths)
+                {
+                    string jsonString = File.ReadAllText(fileNameJson);
+                    confOld = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
+
+                    //just for check
+                    string fileNamjeJsonNew = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
+                    string jsonStringNew = File.ReadAllText(fileNamjeJsonNew);
+                    Config confNewNotCopied = (Config)ZeroDep.Json.Deserialize(jsonStringNew, typeof(Config));
+
+                }
 
                 //copy files
-                string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
                 DirectoryInfo di = new DirectoryInfo(strExeFilePath);
                 FileInfo[] files = di.GetFiles("*.*");
 
@@ -150,6 +193,29 @@ namespace ArgosyUpdater
                     file.CopyTo(fullFname, true);
                 }
 
+                //restore localpaths
+                if (keeplocalpaths)
+                {
+                    string jsonString = File.ReadAllText(fileNameJson);
+                    Config confNew = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
+
+                    foreach (FolderPair fp in confNew.settings.FolderPairs)
+                    {
+                        foreach(FolderPair fpOld in confOld.settings.FolderPairs)
+                        {
+                            if (fpOld.ID == fp.ID)
+                            {
+                                fp.LocalPath = fpOld.LocalPath;
+                            }
+                        }
+                    }
+
+ 
+                    string jsonStringNew = ZeroDep.Json.SerializeFormatted( confNew );
+                    File.WriteAllText(fileNameJson, jsonStringNew);
+                    
+                }
+
 
                 //dozvoli izmjenu settingsa, ma svega na kraju i program datga radi logova
                 GrantAccess(appPath);
@@ -157,7 +223,17 @@ namespace ArgosyUpdater
 
                 CheckShortcut();
 
-                Environment.Exit(5); //INSTALL SUCCESSFULL
+
+                //restart app, al ovo ce pokrenuti pod ADMINOM koji radi instalaciju , FAK, ajde bar su svi pathovi zapravo globalni 
+                //dakle necemo ovdje restart raditi nego cemo zapisati SIGNAL za restart, kasnije ce check po timeru to provjeriti
+                //TODO odvojeni timer za ovo , ali reperkusije rtreba dobro pregledati, dali je timr stoped ostali itd.....
+                if (restart)
+                {
+                    string restFile = Path.Combine(programData, "_command.txt");
+                    File.WriteAllText(restFile, "RESTART");
+                }
+
+                Environment.Exit(5); //INSTALL SUCCESSFULL  dox da je 5
 
             } catch (Exception ex)
             {
@@ -173,6 +249,63 @@ namespace ArgosyUpdater
                 Environment.Exit(-1);
             }
         }
+
+
+        private static void UnInstall()
+        {
+            try
+            {
+                //kill proceses
+                Process[] pname = Process.GetProcessesByName("ArgosyUpdater");
+                if (pname.Length > 0)
+                {
+                    foreach (Process proc in pname)
+                    {
+                        //ne pocini samoubojstvo , to je smrtni grijeh
+                        if (!(proc.Id == Process.GetCurrentProcess().Id))
+                        {
+                            proc.Kill();
+                            proc.WaitForExit();
+                        }
+                    }
+                }
+
+                //delete folders
+                if (Directory.Exists(appPath))
+                {
+                    Console.WriteLine("Delete : " + appPath);
+                    Directory.Delete(appPath, true);
+                }
+
+                if (Directory.Exists(programData))
+                {
+                    Console.WriteLine("Delete : " + programData);
+                    Directory.Delete(programData, true);
+                }
+
+                //delete shortcuts
+                string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "ArgosyWatcher.lnk");
+                File.Delete(desktopLink);
+
+                Environment.Exit(5); //UNINSTALL SUCCESSFULL  dox da je 5
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Exception : ");
+                Console.WriteLine(ex.Message);
+                Console.WriteLine(ex.StackTrace);
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine("Inner : ");
+                    Console.WriteLine(ex.InnerException.Message);
+                    Console.WriteLine(ex.InnerException.StackTrace);
+                }
+                Environment.Exit(-1);
+            }
+        }
+
+
 
         private static void GrantAccess(string fullPath)
         {
@@ -207,36 +340,43 @@ namespace ArgosyUpdater
 
         private static void CheckSettings()
         {
-            // Network share path
-            networkShare = Properties.Settings.Default.SharePath;
-            // Local download path
-            localPath = Properties.Settings.Default.LocalPath;
+            string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            string fileName = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
+            string jsonString = File.ReadAllText(fileName);
+            conf = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
 
 
-            if (localPath==null || networkShare==null )
+            if (conf.settings== null || conf.settings.FolderPairs == null )
             {
-                trayIcon.ShowBalloonTip(3000, "Setting errors", "Setting/paths are empty !", ToolTipIcon.Error);
+                MessageBox.Show("Setting/paths are empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
-
-            //check is there same number of entrys
-            int cnt = networkShare.Count;
-            if (localPath.Count != cnt )
+            foreach (var pair in conf.settings.FolderPairs)
             {
-                trayIcon.ShowBalloonTip(3000, "Setting errors", "Not same number of entrys in string collection !", ToolTipIcon.Error);
+                if ( String.IsNullOrEmpty(pair.SharePath) || String.IsNullOrEmpty(pair.LocalPath))
+                {
+                    MessageBox.Show("SharePath or  LocalPath is empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Environment.Exit(-1);
+                }
+            }
+
+
+            if (String.IsNullOrEmpty(conf.settings.TrayIconText))
+            {
+                MessageBox.Show("TrayIconText setting is empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
-            if (String.IsNullOrEmpty(Properties.Settings.Default.TrayIconText))
+            if (conf.settings.TimerInterval < 60)
             {
-                trayIcon.ShowBalloonTip(3000, "Setting errors", "TrayIconText setting is empty !", ToolTipIcon.Error);
+                MessageBox.Show("TimerInterval is less that 60 sec !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
-            if (Properties.Settings.Default.TimerInterval < 30)
+            if (conf.settings.PropagateDeletes == null)
             {
-                trayIcon.ShowBalloonTip(3000, "Setting errors", "TimerInterval is less that 30 sec !", ToolTipIcon.Error);
+                MessageBox.Show("PropagateDeletes is missing !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
@@ -301,10 +441,13 @@ namespace ArgosyUpdater
             Process[] pname = Process.GetProcessesByName("ArgosyUpdater");
             if (pname.Length > 0)
             {
-                if (!(pname[0].Id == Process.GetCurrentProcess().Id))
+                foreach (Process p in pname)
                 {
-                    MessageBox.Show("Please close existing app", "ArgosyUpdater : Another instance detected", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    Environment.Exit(0);
+                    if (!(p.Id == Process.GetCurrentProcess().Id))
+                    {
+                        MessageBox.Show("Please close existing app", "ArgosyUpdater : Another instance detected", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        Environment.Exit(0);
+                    }
                 }
             }
         }
@@ -317,16 +460,28 @@ namespace ArgosyUpdater
 
         private static void MenuSettings(object sender, EventArgs e)
         {
-            ProcessStartInfo  processStartInfo= new ProcessStartInfo();
-            processStartInfo.FileName = "notepad.exe";
-            processStartInfo.Arguments = Path.Combine(appPath, "ArgosyUpdater.exe.config");
-            Process.Start(processStartInfo);
+            //ProcessStartInfo  processStartInfo= new ProcessStartInfo();
+            //processStartInfo.FileName = "notepad.exe";
+            //processStartInfo.Arguments = Path.Combine(appPath, "AppSettings.json");
+            //Process.Start(processStartInfo);
+
+            string fileNameJson = System.IO.Path.Combine(appPath, "AppSettings.json");
+            string jsonString = File.ReadAllText(fileNameJson);
+            Config confForEdit = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
+
+            var form = new EditConfigForm(confForEdit.settings);
+            form.ShowDialog();
+
+            string jsonToSave = ZeroDep.Json.SerializeFormatted( confForEdit);
+            File.WriteAllText(fileNameJson, jsonToSave);
+
         }
 
         private static void MenuOpen(object sender, EventArgs e)
         {
-            string[] strArray = new string[localPath.Count];
-            localPath.CopyTo(strArray, 0);  
+            string[] strArray = new string[conf.settings.FolderPairs.Count];
+            int i = 0;
+            foreach (FolderPair fp in conf.settings.FolderPairs) { strArray[i] = fp.LocalPath; i++; }
 
             ProcessStartInfo  processStartInfo = new ProcessStartInfo();
             processStartInfo.FileName = "explorer.exe";
@@ -377,10 +532,17 @@ namespace ArgosyUpdater
         {
             try
             {
+                timer.Stop(); //ovo je winforms timwr koji samo dodaje triger na message loop,
+                              //nije standardni timer, tj bloka inputm tj nije multithreaded,
+                              //pa ipak na blocking operation u kodu ili dugo trajanje uspijeva pokrenuti nekao drugu operaciju,
+                              //primjećeno ako ostane MsgBox aktivan iz CSscripta
+
                 StringBuilder errors = new StringBuilder();
                 StringBuilder changes = new StringBuilder();
+                StringBuilder commands = new StringBuilder();
                 StringBuilder versions = new StringBuilder();
 
+                CheckCommand(errors, commands);
 
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterBusy.ico");
 
@@ -391,46 +553,34 @@ namespace ArgosyUpdater
                 //spremi odmah da nebude da poslije ne pokupimo u vremenskoj ruspi sto je snimljeno
                 //opet ako pokne copy teba ponistiti ovajsave AAAAAAAAAAAAAAAAAAAAA
 
-                var netShEnum = networkShare.GetEnumerator();
-                var locFolEnum = localPath.GetEnumerator();
-
-
-                while (netShEnum.MoveNext())
+                foreach (FolderPair fp in conf.settings.FolderPairs)
                 {
-                    locFolEnum.MoveNext();
-                    string locFolCurr = locFolEnum.Current;
-                    string netShCurr = netShEnum.Current;
-                    
                     //this sync root folder end subfolders/files
-                    DirectoryCopy(netShCurr, locFolCurr, errors, changes);
-                    DirectoryClean(netShCurr, locFolCurr, errors, changes);
-                    DoScripts(errors, versions, locFolCurr);
+                    DirectoryCopy(fp.SharePath, fp.LocalPath, errors, changes);
+
+                    if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes); }
+
+                    //DoScripts(errors, versions, fp.LocalPath);  //DoScripts cemo samo samo ako je bilo izmjena
 
                 }
 
-
-                if (errors.Length > 0)
-                {
-                    thereWereErros = true;
-                    string errorFile = Path.Combine(programData, "SyncErrors.txt");
-                    File.WriteAllText(errorFile, errors.ToString());
-                    trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
-                }
-                else
-                {
-                    thereWereErros = false;
-                }
 
                 if (changes.Length > 0)
                 {
                     thereWereChanges = true;
-                    string changeFile = Path.Combine(programData, "SyncChanges.txt");
+                    string changeFile = Path.Combine(programData, "_SyncChanges.txt");
                     File.WriteAllText(changeFile, changes.ToString());
+
+                    foreach (FolderPair fp in conf.settings.FolderPairs)
+                    {
+                        DoScripts(errors, versions, fp.LocalPath);
+                    }
+
                     trayIcon.ShowBalloonTip(3000, "New Version", "New version of APP(s) has been downloaded." + Environment.NewLine + versions, ToolTipIcon.Info);
 
                     if (versions.Length > 0)
                     {
-                        string versionFile = Path.Combine(programData, "Versions.txt");
+                        string versionFile = Path.Combine(programData, "_Versions.txt");
                         File.WriteAllText(versionFile, versions.ToString());
                     }
 
@@ -438,6 +588,19 @@ namespace ArgosyUpdater
                 else
                 {
                     thereWereChanges = false;
+                }
+
+
+                if (errors.Length > 0)
+                {
+                    thereWereErros = true;
+                    string errorFile = Path.Combine(programData, "_SyncErrors.txt");
+                    File.WriteAllText(errorFile, errors.ToString());
+                    trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
+                }
+                else
+                {
+                    thereWereErros = false;
                 }
 
 
@@ -449,23 +612,79 @@ namespace ArgosyUpdater
             }
             catch (Exception ex)
             {
-                string errorFile = Path.Combine(programData, "AppError.txt");
+                string errorFile = Path.Combine(programData, "_AppError.txt");
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
                 trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
             } finally {
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdater.ico");
+                timer.Start(); //pokreni ponovo jer smo zaustavili na pocetku
+            }
+        }
+
+        private static void CheckCommand(StringBuilder errors, StringBuilder commands)
+        {
+            try
+            {
+                //ovdje cemo provjeriti da li treba restart
+                string restFile = Path.Combine(programData, "_command.txt");
+                
+                if ( !File.Exists(restFile)) { return; }
+
+                string command = File.ReadAllText(restFile);
+                if (!string.IsNullOrEmpty(command))
+                {
+                    if (command.Trim() == "RESTART")
+                    {
+                        commands.AppendLine("RESTART");
+                        UpdateDb(errors, commands, new StringBuilder(), DateTime.Now);
+
+                        Process[] pname = Process.GetProcessesByName("ArgosyUpdater");
+                        if (pname.Length > 0)
+                        {
+                            foreach (Process proc in pname)
+                            {
+                                //ne pocini samoubojstvo , to je smrtni grijeh
+                                if (!(proc.Id == Process.GetCurrentProcess().Id))
+                                {
+                                    proc.Kill();
+                                    proc.WaitForExit();
+                                }
+                            }
+                        }
+
+
+                        //pokreni novu instancu
+                        ProcessStartInfo psi = new ProcessStartInfo();
+                        psi.UseShellExecute = false;
+                        psi.FileName = Path.Combine(appPath, "ArgosyUpdater.exe");
+                        psi.WorkingDirectory = appPath;
+
+                        File.Delete(restFile); //poništi komandu
+
+                        Process.Start(psi); //onih sleep 5 sec je sad dovoljno da ovaj stigne izaći, pa i da poslije napravi running copy  
+                        
+                        Environment.Exit(0);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddError(ex, errors, "");
             }
         }
 
         private static void DoScripts(StringBuilder errors, StringBuilder versions, string locFolCurr)
         {
+            dynamic dynObject = null;
             try {
                 string scriptPath = Path.Combine(locFolCurr, "_scripts");
                 if (!Directory.Exists(scriptPath)) { return; }
                 scriptPath = Path.Combine(scriptPath, "ArgCScript.cs");     //CONVENTION !!!!
                 if (!File.Exists(scriptPath)) { return; }
-                string script = File.ReadAllText(scriptPath); 
-                dynamic dynObject = CSScript.LoadCode(script).CreateObject("*");
+                string script = File.ReadAllText(scriptPath);
+                CSScript.CacheEnabled = false;
+                System.Reflection.Assembly ass = CSScript.LoadCode(script);
+                dynObject = ass.CreateObject("*");
                 versions.AppendLine( dynObject.GetVersion(locFolCurr) );
 
                 //shortcut
@@ -475,8 +694,7 @@ namespace ArgosyUpdater
                     string exePath = shResult[0];
                     string shName = shResult[1];
                     string iconPath = shResult[2];
-                    string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), shName + ".lnk");
-                    string fullExe = Path.Combine(appPath, "ArgosyUpdater.exe");
+                    string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), shName + ".lnk");
                     string startIn = Path.GetDirectoryName(exePath);
                     Extensions.XShortCut.Create(desktopLink, exePath, startIn, shName, iconPath);
                 }
@@ -488,6 +706,10 @@ namespace ArgosyUpdater
             } catch (Exception ex)
             {
                 AddError(ex, errors, locFolCurr);
+            }
+            finally {
+                GC.Collect(); //Argosy.exe ostaje zalockam u CS-scriptu, mada smo i tamo stavili drugi nacin loada assemblya opet ostaje zalockan ,
+                              //pa smo za svaki slkucaj i ovdje gc, sada nekako nije zalockan nakon provjere verzije
             }
         }
 
@@ -502,9 +724,9 @@ namespace ArgosyUpdater
         {
             try
             {
-                if (!String.IsNullOrEmpty(Properties.Settings.Default.ConnectionString))
+                if (!String.IsNullOrEmpty(conf.settings.ConnectionString))
                 {
-                    string connectionString = Properties.Settings.Default.ConnectionString;
+                    string connectionString = conf.settings.ConnectionString;
 
                     string queryString = @"SELECT [MachineName]
       ,[IPadress]
@@ -567,8 +789,11 @@ namespace ArgosyUpdater
                             reader.Close();
 
                             string ipAdrss = "";
-                            foreach (var ip in machine.AddressList) { ipAdrss = ipAdrss + ip.ToString() + " , ";  }
-                            ipAdrss = ipAdrss.Substring(0, ipAdrss.Length - 2); //remove last comma
+                            foreach (var ip in machine.AddressList) { 
+                                if (conf.settings.ReportIPv4Addr && ip.AddressFamily == AddressFamily.InterNetwork) ipAdrss = ipAdrss + ip.ToString() + " , ";
+                                if (conf.settings.ReportIPv6Addr && ip.AddressFamily == AddressFamily.InterNetworkV6) ipAdrss = ipAdrss + ip.ToString() + " , ";
+                            }
+                            if (ipAdrss.Length > 3) ipAdrss = ipAdrss.Substring(0, ipAdrss.Length - 2); //remove last comma
 
                             if (machineExixts)  //update --------------------
                             {
@@ -616,7 +841,7 @@ namespace ArgosyUpdater
                 }
             } catch (Exception ex)
             {
-                string errorFile = Path.Combine(programData, "DbError.txt");
+                string errorFile = Path.Combine(programData, "_DbError.txt");
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
                 return;
             }
@@ -624,7 +849,7 @@ namespace ArgosyUpdater
 
         private static void LoadLastSync(StringBuilder errors)
         {
-            string lastSyncFile = Path.Combine(programData, "lastSync.txt");
+            string lastSyncFile = Path.Combine(programData, "_lastSync.txt");
 
             try
             {
@@ -647,7 +872,7 @@ namespace ArgosyUpdater
 
         private static DateTime SaveLastSync(StringBuilder errors)
         {
-            string lastSyncFile = Path.Combine(programData, "lastSync.txt");
+            string lastSyncFile = Path.Combine(programData, "_lastSync.txt");
             DateTime dateTime = DateTime.Now;
 
             try
@@ -669,12 +894,12 @@ namespace ArgosyUpdater
             if (thereWereErros)
             {
                 //show error in default TXT viewer
-                string errorFile = Path.Combine(programData, "SyncErrors.txt");
+                string errorFile = Path.Combine(programData, "_SyncErrors.txt");
                 System.Diagnostics.Process.Start(errorFile);
             }
             if (thereWereChanges)
             {
-                string changeFile = Path.Combine(programData, "SyncChanges.txt");
+                string changeFile = Path.Combine(programData, "_SyncChanges.txt");
                 System.Diagnostics.Process.Start(changeFile);
             }
 

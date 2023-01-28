@@ -5,7 +5,7 @@ public class Script
 {
 	public static void Main() {
 		var s = new Script();
-		string ver = s.GetVersion("D:\\_ARGOSY");
+		string ver = s.GetVersion("C:\\_ARGOSY_PROD");
 		string[] sh = s.GetExeForShortcut("D:\\_ARGOSY");
 		string sss = s.AfterSync("D:\\_ARGOSY");
 		
@@ -18,9 +18,10 @@ public class Script
                 var dirs = di.GetDirectories().OrderByDescending(d => d.Name).ToList();
                 DirectoryInfo diExedirOne = dirs.FirstOrDefault();
                 string argExe = Path.Combine(diExedirOne.FullName, "Argosy.exe");
-                var ass = System.Reflection.Assembly.LoadFrom(argExe);
+                var ass = System.Reflection.Assembly.Load(File.ReadAllBytes(argExe));
                 var name = ass.GetName();
                 var version = name.Version.ToString();
+				
                 return version;
     }
 	

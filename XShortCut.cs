@@ -7,7 +7,7 @@ namespace ArgosyUpdater.Extensions
     {
         public static string CreateShortCutInStartUpFolder(string exeName, string startIn, string description)
         {
-            var startupFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+            var startupFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup);
             var linkPath = startupFolderPath + @"\" + exeName + "-Shortcut.lnk";
             var targetPath = startIn + @"\" + exeName;
             Create(linkPath, targetPath, startIn, description);
