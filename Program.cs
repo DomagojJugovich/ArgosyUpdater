@@ -26,6 +26,9 @@ namespace ArgosyUpdater
     internal static class Program
     {
         static bool debug = false;
+
+        static int errorsShown = 0;
+
         static string appPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ArgosyUpdater_1_0");
         static NotifyIcon trayIcon;
         static System.Windows.Forms.Timer timer;
@@ -33,8 +36,6 @@ namespace ArgosyUpdater
         static bool thereWereErros = false;
         static bool thereWereChanges = false;
         static Config conf = null;
-
-        static string connectionString;
 
         static string programData;
 
@@ -374,12 +375,6 @@ namespace ArgosyUpdater
                 Environment.Exit(-1);
             }
 
-            if (conf.settings.PropagateDeletes == null)
-            {
-                MessageBox.Show("PropagateDeletes is missing !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(-1);
-            }
-
         }
 
         private static void MakeRunningCopy()
@@ -558,7 +553,7 @@ namespace ArgosyUpdater
                     //this sync root folder end subfolders/files
                     DirectoryCopy(fp.SharePath, fp.LocalPath, errors, changes);
 
-                    if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes); }
+                    if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
 
                     //DoScripts(errors, versions, fp.LocalPath);  //DoScripts cemo samo samo ako je bilo izmjena
 
@@ -573,7 +568,7 @@ namespace ArgosyUpdater
 
                     foreach (FolderPair fp in conf.settings.FolderPairs)
                     {
-                        DoScripts(errors, versions, fp.LocalPath);
+                        DoScripts(errors, versions, fp.LocalPath, fp.SharePath);
                     }
 
                     trayIcon.ShowBalloonTip(3000, "New Version", "New version of APP(s) has been downloaded." + Environment.NewLine + versions, ToolTipIcon.Info);
@@ -596,7 +591,12 @@ namespace ArgosyUpdater
                     thereWereErros = true;
                     string errorFile = Path.Combine(programData, "_SyncErrors.txt");
                     File.WriteAllText(errorFile, errors.ToString());
-                    trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
+
+                    errorsShown++;
+                    if (errorsShown < 3)
+                    {
+                        trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
+                    }
                 }
                 else
                 {
@@ -607,16 +607,25 @@ namespace ArgosyUpdater
                 DateTime now = SaveLastSync(errors); //zbog novog nacine usporedbe maltene nepotrebno
 
                 if (thereWereChanges || thereWereErros) { UpdateDb(errors, changes, versions, now); }
-                
+
 
             }
             catch (Exception ex)
             {
+                //neke teze greske koij enisu pohendlane pri syncu
                 string errorFile = Path.Combine(programData, "_AppError.txt");
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
                 trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
-            } finally {
-                trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdater.ico");
+                trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
+            }
+            finally
+            {
+                if (thereWereErros) {
+                    trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
+                } else {
+                    trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdater.ico");
+                }
+
                 timer.Start(); //pokreni ponovo jer smo zaustavili na pocetku
             }
         }
@@ -669,11 +678,11 @@ namespace ArgosyUpdater
             }
             catch (Exception ex)
             {
-                AddError(ex, errors, "");
+                AddError(ex, errors, "", "");
             }
         }
 
-        private static void DoScripts(StringBuilder errors, StringBuilder versions, string locFolCurr)
+        private static void DoScripts(StringBuilder errors, StringBuilder versions, string locFolCurr, string shareCurrFol)
         {
             dynamic dynObject = null;
             try {
@@ -705,7 +714,7 @@ namespace ArgosyUpdater
 
             } catch (Exception ex)
             {
-                AddError(ex, errors, locFolCurr);
+                AddError(ex, errors, locFolCurr, shareCurrFol);
             }
             finally {
                 GC.Collect(); //Argosy.exe ostaje zalockam u CS-scriptu, mada smo i tamo stavili drugi nacin loada assemblya opet ostaje zalockan ,
@@ -866,7 +875,7 @@ namespace ArgosyUpdater
             }
             catch (Exception ex)
             {
-                AddError(ex, errors, lastSyncFile);
+                AddError(ex, errors, lastSyncFile, "");
             }
         }
 
@@ -883,7 +892,7 @@ namespace ArgosyUpdater
             }
             catch (Exception ex)
             {
-                AddError(ex, errors, lastSyncFile);
+                AddError(ex, errors, lastSyncFile, ""  );
             }
 
             return dateTime;
@@ -952,7 +961,7 @@ namespace ArgosyUpdater
                     }
                     catch (Exception ex)
                     {
-                        AddError(ex, errors, temppath);
+                        AddError(ex, errors, temppath, sourceDirName);
                         continue;
                     }
                 }
@@ -968,20 +977,27 @@ namespace ArgosyUpdater
                     }
                     catch (Exception ex)
                     {
-                        AddError(ex, errors, temppath);
+                        AddError(ex, errors, temppath, sourceDirName);
                         continue;
                     }
                 }
             }
             catch (Exception ex)
             {
-                AddError(ex, errors, destDirName);
+                AddError(ex, errors, destDirName, sourceDirName);
                 return;
             }
         }
 
-        private static void DirectoryClean(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes)
+        private static void DirectoryClean(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes, bool isRoot)
         {
+            //provjeri da li je root dostupan jer inace X.Exists vraca false za sve slucajebe pa se sve pobriše, a necemo to dozvoliti ako je server nedostupan zapravo ili slicno
+            //File/dir.Exists sve potrpa u isti koš
+            if (isRoot)
+            {
+                if (!Directory.Exists(sourceDirName)) { return; }
+            }
+
             // Get the subdirectories for the specified directory.
             DirectoryInfo dir = new DirectoryInfo(destDirName);
 
@@ -1002,7 +1018,7 @@ namespace ArgosyUpdater
                 }
                 catch (Exception ex)
                 {
-                    AddError(ex, errors, file.FullName);
+                    AddError(ex, errors, file.FullName, sourceDirName);
                     continue;
                 }
             }
@@ -1025,12 +1041,12 @@ namespace ArgosyUpdater
                     } else
                     {
                         string temppathDirDest = Path.Combine(destDirName, subdir.Name);
-                        DirectoryClean(temppathDir, temppathDirDest, errors, changes);
+                        DirectoryClean(temppathDir, temppathDirDest, errors, changes, false);
                     }
                 }
                 catch (Exception ex)
                 {
-                    AddError(ex, errors, temppathDir);
+                    AddError(ex, errors, temppathDir, sourceDirName);
                     continue;
                 }
             }
@@ -1057,9 +1073,9 @@ namespace ArgosyUpdater
                 }
         }
 
-        private static void AddError(Exception ex, StringBuilder sb, string path)
+        private static void AddError(Exception ex, StringBuilder sb, string path, string path2)
         {
-            sb.AppendLine(DateTime.Now.ToString() + " - PATH: " + path + "  MSG:" + ex.Message + Environment.NewLine + ex.StackTrace);
+            sb.AppendLine(DateTime.Now.ToString() + " - PATH: " + path + " PATH2: " +  path2 + "  MSG:" + ex.Message + Environment.NewLine + ex.StackTrace);
             if (ex.InnerException != null)
             {
                 sb.AppendLine("     INNER: " + ex.InnerException.Message + Environment.NewLine + ex.InnerException.StackTrace);
