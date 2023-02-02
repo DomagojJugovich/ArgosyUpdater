@@ -240,7 +240,9 @@
     <Content Include="ArgosyUpdaterError.ico">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <Content Include="SQL\TABLE.txt" />
     <Content Include="_script\ArgCScript.cs" />
+    <Content Include="_script\ReadMe.txt" />
     <EmbeddedResource Include="EditConfigForm.resx">
       <DependentUpon>EditConfigForm.cs</DependentUpon>
     </EmbeddedResource>
