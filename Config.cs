@@ -11,10 +11,12 @@ namespace ArgosyUpdater
     public class FolderPair
     {
         public int ID { get; set; }
+        public Boolean Sync { get; set; }
         [EditorAttribute(typeof(FolderNameEditor2), typeof(System.Drawing.Design.UITypeEditor))]
         public string SharePath { get; set; }
         [EditorAttribute(typeof(FolderNameEditor2), typeof(System.Drawing.Design.UITypeEditor))]
         public string LocalPath { get; set; }
+        public BindingList<string> IgnorePaths { get; set; }
     }
 
     public class Config

@@ -18,13 +18,20 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
+using System.ComponentModel;
 
 //TODO finish commands, za lof u db changesa, ako bude ista osim RESTART-a, jer kako se gasio app nema slisla dalje ici za sada
+//TODO sync folders that user wants, keep settings
+//TODO ignore paths
 
 namespace ArgosyUpdater
 {
     internal static class Program
     {
+        [DllImport("kernel32.dll")] static extern bool AttachConsole(int dwProcessId);
+        private const int ATTACH_PARENT_PROCESS = -1;
+
         static bool debug = false;
 
         static int errorsShown = 0;
@@ -44,6 +51,8 @@ namespace ArgosyUpdater
         {
             try
             {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
                 Application.ThreadException += new ThreadExceptionEventHandler(ErrorHandler);
                 AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(UndandledErrorHandler);
@@ -155,10 +164,12 @@ namespace ArgosyUpdater
             }
         }
 
+      
         private static void InstallApp(bool restart, bool keeplocalpaths)
         {
             try
             {
+                Console.WriteLine("AppPath : " + appPath);
                 // no delete , it will be locked
                 if (!Directory.Exists(appPath))
                 {
@@ -207,6 +218,7 @@ namespace ArgosyUpdater
                             if (fpOld.ID == fp.ID)
                             {
                                 fp.LocalPath = fpOld.LocalPath;
+                                fp.Sync = fpOld.Sync;
                             }
                         }
                     }
@@ -310,6 +322,7 @@ namespace ArgosyUpdater
 
         private static void GrantAccess(string fullPath)
         {
+            Console.WriteLine("GrantAccess " + fullPath);
             DirectoryInfo dInfo = new DirectoryInfo(fullPath);
             DirectorySecurity dSecurity = dInfo.GetAccessControl();
             dSecurity.AddAccessRule(new FileSystemAccessRule(
@@ -332,8 +345,10 @@ namespace ArgosyUpdater
 
         private static void CheckShortcut()
         {
+            Console.WriteLine("CheckShortcut strtup");
             Extensions.XShortCut.CreateShortCutInStartUpFolder("ArgosyUpdater.exe", appPath, "Argosy updater, maintains local app");
 
+            Console.WriteLine("CheckShortcut desktop");
             string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "ArgosyWatcher.lnk");
             string fullExe = Path.Combine(appPath, "ArgosyUpdater.exe");
             Extensions.XShortCut.Create(desktopLink, fullExe, appPath, "Argosy updater, maintains local app");
@@ -522,7 +537,7 @@ namespace ArgosyUpdater
 
             return ret;
         }
-
+        
         static void CheckNetworkShare(object sender, EventArgs e)
         {
             try
@@ -550,8 +565,10 @@ namespace ArgosyUpdater
 
                 foreach (FolderPair fp in conf.settings.FolderPairs)
                 {
+                    if (!fp.Sync) continue;  //skip where Sync is false
+
                     //this sync root folder end subfolders/files
-                    DirectoryCopy(fp.SharePath, fp.LocalPath, errors, changes);
+                    DirectoryCopy(fp.SharePath, fp.LocalPath, errors, changes, fp.IgnorePaths, fp.SharePath);
 
                     if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
 
@@ -694,19 +711,30 @@ namespace ArgosyUpdater
                 CSScript.CacheEnabled = false;
                 System.Reflection.Assembly ass = CSScript.LoadCode(script);
                 dynObject = ass.CreateObject("*");
-                versions.AppendLine( dynObject.GetVersion(locFolCurr) );
 
-                //shortcut
-                if (HasMethod(dynObject, "GetExeForShortcut"))
+                //version
+                if (HasMethod(dynObject, "GetVersion"))
                 {
-                    string[] shResult = dynObject.GetExeForShortcut(locFolCurr);
-                    string exePath = shResult[0];
-                    string shName = shResult[1];
-                    string iconPath = shResult[2];
-                    string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), shName + ".lnk");
-                    string startIn = Path.GetDirectoryName(exePath);
-                    Extensions.XShortCut.Create(desktopLink, exePath, startIn, shName, iconPath);
+                    versions.AppendLine(dynObject.GetVersion(locFolCurr));
                 }
+
+                //shortcuts
+                for (int i=1; i<10; i++)
+                {
+                    string methodName = "GetExeForShortcut" + i.ToString();
+                    if (HasMethod(dynObject, methodName))
+                    {
+                        //string[] shResult = dynObject.GetExeForShortcut(locFolCurr);
+                        string[] shResult = dynObject.GetType().GetMethod(methodName).Invoke(dynObject, new object[] { locFolCurr });
+                        string exePath = shResult[0];
+                        string shName = shResult[1];
+                        string iconPath = shResult[2];
+                        string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), shName + ".lnk");
+                        string startIn = Path.GetDirectoryName(exePath);
+                        Extensions.XShortCut.Create(desktopLink, exePath, startIn, shName, iconPath);
+                    }
+                }
+                
 
                 //after sync
                 if (HasMethod(dynObject, "AfterSync")) { dynObject.AfterSync(locFolCurr); }
@@ -919,10 +947,20 @@ namespace ArgosyUpdater
             //Process.Start(startInfo);
         }
 
-        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes)
+        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
         {
             try
             {
+                //check is ist on ignore list
+
+                foreach (string path in ignorePaths)
+                {
+                    string dir1 = Path.Combine(currSourceRootParm, path).TrimEnd('\\');
+                    string dir2 = sourceDirName.TrimEnd('\\');
+
+                    if (dir1 == dir2) { return; }
+                }
+
                 // Get the subdirectories for the specified directory.
                 DirectoryInfo dir = new DirectoryInfo(sourceDirName);
 
@@ -973,7 +1011,7 @@ namespace ArgosyUpdater
                     string temppath="";
                     try { 
                         temppath = Path.Combine(destDirName, subdir.Name);
-                        DirectoryCopy(subdir.FullName, temppath, errors, changes);
+                        DirectoryCopy(subdir.FullName, temppath, errors, changes, ignorePaths , currSourceRootParm);
                     }
                     catch (Exception ex)
                     {
@@ -1095,5 +1133,7 @@ namespace ArgosyUpdater
             //Application.Exit();
             //Environment.Exit(-1);
         }
+
+
     }
 }
