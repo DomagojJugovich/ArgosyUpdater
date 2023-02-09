@@ -32,6 +32,8 @@ namespace ArgosyUpdater
         [DllImport("kernel32.dll")] static extern bool AttachConsole(int dwProcessId);
         private const int ATTACH_PARENT_PROCESS = -1;
 
+        static string appVersion = "";
+
         static bool debug = false;
 
         static int errorsShown = 0;
@@ -70,6 +72,11 @@ namespace ArgosyUpdater
                 CheckOtherProcesses();
                 if (!debug) MakeRunningCopy(); //Exits here if this is not running copy
                 //CheckShortcut(); it is done in install
+
+
+                System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                System.Diagnostics.FileVersionInfo fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly.Location);
+                appVersion = fvi.FileVersion;
 
                 CheckSettings();
 
@@ -784,7 +791,8 @@ namespace ArgosyUpdater
            ,[AppFolderVersions]
            ,[LogChanges]
            ,[LogErrors]
-           ,[UpdaterTerminalError])
+           ,[UpdaterTerminalError]
+           ,[ArgosyUpdaterVersion])
      VALUES
            (@MachineName
            ,@IPadress
@@ -793,7 +801,8 @@ namespace ArgosyUpdater
            ,@AppFolderVersions
            ,@LogChanges
            ,@LogErrors
-           ,@UpdaterTerminalError)";
+           ,@UpdaterTerminalError
+           ,@ArgosyUpdaterVersion)";
 
 
                     string updateStrig = @"UPDATE [dbo].[ArgosyUpdaterMachines]
@@ -804,6 +813,7 @@ namespace ArgosyUpdater
       ,[LogChanges] = @LogChanges
       ,[LogErrors] = @LogErrors
       ,[UpdaterTerminalError] = @UpdaterTerminalError
+      ,[ArgosyUpdaterVersion] = @ArgosyUpdaterVersion
  WHERE MachineName = @MachineNameWhere";
 
 
@@ -843,6 +853,7 @@ namespace ArgosyUpdater
                                 commandU.Parameters.AddWithValue("@LogErrors", errors.ToString());
                                 commandU.Parameters.AddWithValue("@UpdaterTerminalError", "");
                                 commandU.Parameters.AddWithValue("@MachineNameWhere", machine.HostName.Trim());
+                                commandU.Parameters.AddWithValue("@ArgosyUpdaterVersion", appVersion);
 
                                 commandU.ExecuteNonQuery();
 
@@ -859,6 +870,7 @@ namespace ArgosyUpdater
                                 commandI.Parameters.AddWithValue("@LogChanges", changes.ToString());
                                 commandI.Parameters.AddWithValue("@LogErrors", errors.ToString());
                                 commandI.Parameters.AddWithValue("@UpdaterTerminalError", "");
+                                commandI.Parameters.AddWithValue("@ArgosyUpdaterVersion", appVersion);
 
                                 commandI.ExecuteNonQuery();
 
