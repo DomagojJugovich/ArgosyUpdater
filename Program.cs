@@ -20,11 +20,10 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.ComponentModel;
+using System.Runtime.InteropServices.ComTypes;
 
 //TODO finish commands, za lof u db changesa, ako bude ista osim RESTART-a, jer kako se gasio app nema slisla dalje ici za sada
-//TODO sync folders that user wants, keep settings
-//TODO ignore paths
-
+//TODO progress
 namespace ArgosyUpdater
 {
     internal static class Program
@@ -78,7 +77,7 @@ namespace ArgosyUpdater
                 System.Diagnostics.FileVersionInfo fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly.Location);
                 appVersion = fvi.FileVersion;
 
-                CheckSettings();
+                CheckSettings(null);
 
                 // Initialize tray icon
                 trayIcon = new NotifyIcon()
@@ -118,7 +117,6 @@ namespace ArgosyUpdater
                 Environment.Exit(-1);
             }
             finally {
-                MessageBox.Show("finally");
                 timer.Stop();
                 trayIcon.Dispose();
             }
@@ -361,11 +359,20 @@ namespace ArgosyUpdater
             Extensions.XShortCut.Create(desktopLink, fullExe, appPath, "Argosy updater, maintains local app");
         }
 
-        private static void CheckSettings()
+        private static void CheckSettings(string jsonSett)
         {
-            string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            string fileName = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
-            string jsonString = File.ReadAllText(fileName);
+            string jsonString;
+
+            if (jsonSett == null)
+            {
+                string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string fileName = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
+                jsonString = File.ReadAllText(fileName);
+            } else
+            {
+                jsonString = jsonSett;
+            }
+            
             conf = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
 
 
@@ -492,6 +499,9 @@ namespace ArgosyUpdater
             string jsonToSave = ZeroDep.Json.SerializeFormatted( confForEdit);
             File.WriteAllText(fileNameJson, jsonToSave);
 
+            //update config
+            CheckSettings(jsonToSave);
+
         }
 
         private static void MenuOpen(object sender, EventArgs e)
@@ -547,6 +557,8 @@ namespace ArgosyUpdater
         
         static void CheckNetworkShare(object sender, EventArgs e)
         {
+            Progress frmProgress=null;
+
             try
             {
                 timer.Stop(); //ovo je winforms timwr koji samo dodaje triger na message loop,
@@ -554,10 +566,18 @@ namespace ArgosyUpdater
                               //pa ipak na blocking operation u kodu ili dugo trajanje uspijeva pokrenuti nekao drugu operaciju,
                               //primjećeno ako ostane MsgBox aktivan iz CSscripta
 
-                StringBuilder errors = new StringBuilder();
-                StringBuilder changes = new StringBuilder();
-                StringBuilder commands = new StringBuilder();
+                StringBuilderExt errors = new StringBuilderExt();
+                StringBuilderExt changes = new StringBuilderExt();
+                StringBuilderExt commands = new StringBuilderExt();
                 StringBuilder versions = new StringBuilder();
+
+                //show progress
+                if (conf.settings.ShowProgress)
+                {
+                    frmProgress = new Progress(changes, errors);
+                    frmProgress.Show();
+                    frmProgress.Refresh();
+                }
 
                 CheckCommand(errors, commands);
 
@@ -644,6 +664,10 @@ namespace ArgosyUpdater
             }
             finally
             {
+                Thread.Sleep(5000);
+
+                if (frmProgress != null) frmProgress.Close();
+
                 if (thereWereErros) {
                     trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
                 } else {
@@ -654,7 +678,7 @@ namespace ArgosyUpdater
             }
         }
 
-        private static void CheckCommand(StringBuilder errors, StringBuilder commands)
+        private static void CheckCommand(StringBuilderExt errors, StringBuilderExt commands)
         {
             try
             {
@@ -706,7 +730,7 @@ namespace ArgosyUpdater
             }
         }
 
-        private static void DoScripts(StringBuilder errors, StringBuilder versions, string locFolCurr, string shareCurrFol)
+        private static void DoScripts(StringBuilderExt errors, StringBuilder versions, string locFolCurr, string shareCurrFol)
         {
             dynamic dynObject = null;
             try {
@@ -764,7 +788,7 @@ namespace ArgosyUpdater
         }
 
 
-        private static void UpdateDb(StringBuilder errors, StringBuilder changes, StringBuilder versions, DateTime now)
+        private static void UpdateDb(StringBuilderExt errors, StringBuilderExt changes, StringBuilder versions, DateTime now)
         {
             try
             {
@@ -890,13 +914,14 @@ namespace ArgosyUpdater
                 }
             } catch (Exception ex)
             {
+                AddError(ex, errors, "DATABASE", "");
                 string errorFile = Path.Combine(programData, "_DbError.txt");
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
                 return;
             }
         }
 
-        private static void LoadLastSync(StringBuilder errors)
+        private static void LoadLastSync(StringBuilderExt errors)
         {
             string lastSyncFile = Path.Combine(programData, "_lastSync.txt");
 
@@ -919,7 +944,7 @@ namespace ArgosyUpdater
             }
         }
 
-        private static DateTime SaveLastSync(StringBuilder errors)
+        private static DateTime SaveLastSync(StringBuilderExt errors)
         {
             string lastSyncFile = Path.Combine(programData, "_lastSync.txt");
             DateTime dateTime = DateTime.Now;
@@ -959,7 +984,7 @@ namespace ArgosyUpdater
             //Process.Start(startInfo);
         }
 
-        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
+        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
         {
             try
             {
@@ -1039,7 +1064,7 @@ namespace ArgosyUpdater
             }
         }
 
-        private static void DirectoryClean(string sourceDirName, string destDirName, StringBuilder errors, StringBuilder changes, bool isRoot)
+        private static void DirectoryClean(string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, bool isRoot)
         {
             //provjeri da li je root dostupan jer inace X.Exists vraca false za sve slucajebe pa se sve pobriše, a necemo to dozvoliti ako je server nedostupan zapravo ili slicno
             //File/dir.Exists sve potrpa u isti koš
@@ -1123,7 +1148,7 @@ namespace ArgosyUpdater
                 }
         }
 
-        private static void AddError(Exception ex, StringBuilder sb, string path, string path2)
+        private static void AddError(Exception ex, StringBuilderExt sb, string path, string path2)
         {
             sb.AppendLine(DateTime.Now.ToString() + " - PATH: " + path + " PATH2: " +  path2 + "  MSG:" + ex.Message + Environment.NewLine + ex.StackTrace);
             if (ex.InnerException != null)
