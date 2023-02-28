@@ -21,9 +21,17 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Runtime.InteropServices.ComTypes;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 //TODO finish commands, za lof u db changesa, ako bude ista osim RESTART-a, jer kako se gasio app nema slisla dalje ici za sada
-//TODO progress
+//TODO lock file, tj detekcija da li smo povukli cijelu verziju !!!!!!
+//    zapamtimo kad smo krennuli DateTime
+//    picemo sve datume fajli, u var latestDateTime i kaok checkiramo ako naletimo na noviju zapisemo, nakon synca vidimo 
+//    ako je to latestDate ima vrijme nakon datetimne kad smo krenuli roknemo sync ponovo (daj oon 10-20 sec lufta u rikverc ovdje)
+//    zastitia pokretanja nekompletnog EXEDira treba biti u PowerShellu, ali kako , 
+//https://github.com/goldfix/Transactional-NTFS-TxF-.NET/blob/master/DOCUMENTATION.md
+
+
 namespace ArgosyUpdater
 {
     internal static class Program
@@ -122,6 +130,7 @@ namespace ArgosyUpdater
             }
 
         }
+
 
         private static void CheckArgs()
         {
