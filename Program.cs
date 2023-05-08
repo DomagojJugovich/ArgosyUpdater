@@ -136,7 +136,6 @@ namespace ArgosyUpdater
         {
             string[] args = Environment.GetCommandLineArgs();
             bool restart = false;
-            bool keeplocalpaths = false;
             bool install = false;
             bool uninstall = false;
 
@@ -152,10 +151,6 @@ namespace ArgosyUpdater
                     {
                         restart = true;
                     }
-                    else if (arg == "keeplocalpaths")
-                    {
-                        keeplocalpaths=true;
-                    }
                     else if (arg == "install")
                     {
                         install = true;
@@ -167,7 +162,7 @@ namespace ArgosyUpdater
                 }
 
                 if (install) { 
-                    InstallApp(restart, keeplocalpaths); 
+                    InstallApp(restart); 
                 } else if(uninstall)
                 {
                     UnInstall();
@@ -179,7 +174,7 @@ namespace ArgosyUpdater
         }
 
       
-        private static void InstallApp(bool restart, bool keeplocalpaths)
+        private static void InstallApp(bool restart)
         {
             try
             {
@@ -193,21 +188,7 @@ namespace ArgosyUpdater
 
                 string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 
-                //preserve localpaths
-                Config confOld = null;
-                string fileNameJson = System.IO.Path.Combine(appPath, "AppSettings.json");
-                if (keeplocalpaths)
-                {
-                    string jsonString = File.ReadAllText(fileNameJson);
-                    confOld = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
-
-                    //just for check
-                    string fileNamjeJsonNew = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
-                    string jsonStringNew = File.ReadAllText(fileNamjeJsonNew);
-                    Config confNewNotCopied = (Config)ZeroDep.Json.Deserialize(jsonStringNew, typeof(Config));
-
-                }
-
+              
                 //copy files
                 DirectoryInfo di = new DirectoryInfo(strExeFilePath);
                 FileInfo[] files = di.GetFiles("*.*");
@@ -217,30 +198,6 @@ namespace ArgosyUpdater
                     string fullFname = Path.Combine(appPath, file.Name);
                     Console.WriteLine("Copy : " + fullFname);
                     file.CopyTo(fullFname, true);
-                }
-
-                //restore localpaths
-                if (keeplocalpaths)
-                {
-                    string jsonString = File.ReadAllText(fileNameJson);
-                    Config confNew = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
-
-                    foreach (FolderPair fp in confNew.settings.FolderPairs)
-                    {
-                        foreach(FolderPair fpOld in confOld.settings.FolderPairs)
-                        {
-                            if (fpOld.ID == fp.ID)
-                            {
-                                fp.LocalPath = fpOld.LocalPath;
-                                fp.Sync = fpOld.Sync;
-                            }
-                        }
-                    }
-
- 
-                    string jsonStringNew = ZeroDep.Json.SerializeFormatted( confNew );
-                    File.WriteAllText(fileNameJson, jsonStringNew);
-                    
                 }
 
 
@@ -428,7 +385,15 @@ namespace ArgosyUpdater
                 {
                     string fullFname = Path.Combine(programData, file.Name);
                     Console.WriteLine("Copy : " + fullFname);
-                    file.CopyTo(fullFname, true);
+
+                    //ako je config treba ga isprocesirati.
+                    if (file.Name == "AppSettings.json")
+                    {
+                        ProcessSettings();
+                    } else
+                    {
+                        file.CopyTo(fullFname, true);
+                    }
                 }
 
                 ProcessStartInfo psi = new ProcessStartInfo();
@@ -440,6 +405,48 @@ namespace ArgosyUpdater
 
                 Environment.Exit(0);
             }
+        }
+
+        private static void ProcessSettings() {
+
+            var appSettProgramFiles = Path.Combine(appPath, "AppSettings.json");
+            var appSettProgramData = Path.Combine(programData, "AppSettings.json");
+
+
+            //preserve overidable settings (    "ShowProgress": "False",  "ShowNotifications": "True", "TimerInterval": "1200")
+            //and preserve local paths in folder pairs
+            Config confProgramFiles = null;
+            Config confProgramData = null;
+
+            string jsonStringProgramFiles = File.ReadAllText(appSettProgramFiles);
+                confProgramFiles = (Config)ZeroDep.Json.Deserialize(jsonStringProgramFiles, typeof(Config));
+
+            string jsonStringProgramData = File.ReadAllText(appSettProgramData);
+                confProgramData = (Config)ZeroDep.Json.Deserialize(jsonStringProgramData, typeof(Config));
+
+            //local paths
+            foreach (FolderPair fp in confProgramFiles.settings.FolderPairs)
+            {
+                    foreach (FolderPair fpOld in confProgramData.settings.FolderPairs)
+                    {
+                        if (fpOld.ID == fp.ID)
+                        {
+                            fp.LocalPath = fpOld.LocalPath;
+                            fp.Sync = fpOld.Sync;
+                        }
+                    }
+            }
+
+            //overidable settigns
+            confProgramFiles.settings.ShowProgress = confProgramData.settings.ShowProgress;
+            confProgramFiles.settings.ShowNotifications = confProgramData.settings.ShowNotifications;
+            confProgramFiles.settings.TimerInterval = confProgramData.settings.TimerInterval;
+
+
+            //save new config from programFiles updated with config from programData
+            string jsonStringNew = ZeroDep.Json.SerializeFormatted(confProgramFiles);
+            File.WriteAllText(appSettProgramData, jsonStringNew);
+
         }
 
         //private static void MakeRunningCopy()
@@ -498,14 +505,14 @@ namespace ArgosyUpdater
             //processStartInfo.Arguments = Path.Combine(appPath, "AppSettings.json");
             //Process.Start(processStartInfo);
 
-            string fileNameJson = System.IO.Path.Combine(appPath, "AppSettings.json");
+            string fileNameJson = Path.Combine(programData, "AppSettings.json");
             string jsonString = File.ReadAllText(fileNameJson);
             Config confForEdit = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
 
             var form = new EditConfigForm(confForEdit.settings);
             form.ShowDialog();
 
-            string jsonToSave = ZeroDep.Json.SerializeFormatted( confForEdit);
+            string jsonToSave = ZeroDep.Json.SerializeFormatted( confForEdit  );
             File.WriteAllText(fileNameJson, jsonToSave);
 
             //update config
@@ -624,7 +631,7 @@ namespace ArgosyUpdater
                         DoScripts(errors, versions, fp.LocalPath, fp.SharePath);
                     }
 
-                    trayIcon.ShowBalloonTip(3000, "New Version", "New version of APP(s) has been downloaded." + Environment.NewLine + versions, ToolTipIcon.Info);
+                    if (conf.settings.ShowNotifications) trayIcon.ShowBalloonTip(3000, "New Version", "New version of APP(s) has been downloaded." + Environment.NewLine + versions, ToolTipIcon.Info);
 
                     if (versions.Length > 0)
                     {
@@ -648,7 +655,7 @@ namespace ArgosyUpdater
                     errorsShown++;
                     if (errorsShown < 3)
                     {
-                        trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
+                        if (conf.settings.ShowNotifications) trayIcon.ShowBalloonTip(3000, "Erros while syncing", "New version of Argosy has been tryed to download with errors, see : " + errorFile, ToolTipIcon.Warning);
                     }
                 }
                 else
@@ -668,7 +675,7 @@ namespace ArgosyUpdater
                 //neke teze greske koij enisu pohendlane pri syncu
                 string errorFile = Path.Combine(programData, "_AppError.txt");
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
-                trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
+                if (conf.settings.ShowNotifications) trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
             }
             finally

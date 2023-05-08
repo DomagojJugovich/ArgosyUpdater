@@ -32,7 +32,8 @@ namespace ArgosyUpdater
         public Boolean PropagateDeletes { get; set; } = true;
         public Boolean UseNTFSTransactions { get; set; } = true;
         public Boolean ShowProgress { get; set; } = false;
-        public int TimerInterval { get; set; }
+        public Boolean ShowNotifications { get; set; } = true;
+        public int TimerInterval { get; set; } = 1200;
         public string ConnectionString { get; set; }
         public List<FolderPair> FolderPairs { get; set; }
     }

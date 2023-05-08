@@ -5244,7 +5244,9 @@ namespace ZeroDep
         /// <summary>
         /// The default value.
         /// </summary>
-        Default = UseXmlIgnore | UseScriptIgnore | SerializeFields | AutoParseDateTime | UseJsonAttribute | SkipGetOnly | SkipDefaultValues | SkipZeroValueTypes | SkipNullPropertyValues | SkipNullDateTimeValues,
+        //Default = UseXmlIgnore | UseScriptIgnore | SerializeFields | AutoParseDateTime | UseJsonAttribute | SkipGetOnly | SkipDefaultValues | SkipZeroValueTypes | SkipNullPropertyValues | SkipNullDateTimeValues,
+        //I changed this because SkipZeroValueTypes doesnt write bool if it is false , becaus ebool defauilt is false, but if I have default value in config that it is true, and bool that it is false is not written to config then it stays true becaus it is not overidden from config
+        Default = UseXmlIgnore | UseScriptIgnore | SerializeFields | AutoParseDateTime | UseJsonAttribute | SkipGetOnly |  SkipNullPropertyValues | SkipNullDateTimeValues,
     }
 
     /// <summary>
