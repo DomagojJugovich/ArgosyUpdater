@@ -389,7 +389,10 @@ namespace ArgosyUpdater
                     //ako je config treba ga isprocesirati.
                     if (file.Name == "AppSettings.json")
                     {
-                        ProcessSettings();
+                        if (File.Exists(fullFname)) { ProcessSettings(); } else
+                        {
+                            file.CopyTo(fullFname, true);
+                        }
                     } else
                     {
                         file.CopyTo(fullFname, true);
