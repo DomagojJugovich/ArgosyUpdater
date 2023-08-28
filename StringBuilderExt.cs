@@ -29,7 +29,7 @@ namespace ArgosyUpdater
         //methods
         public StringBuilderExt AppendLine(string value)
         {
-            _sb.AppendLine(value);
+            _sb.AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + value);
             NotifyProgress?.Invoke(value);
             return this;
         }
