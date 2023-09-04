@@ -8,9 +8,9 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Text;
-using System.IO;
 using System.Linq;
 using System.Net;
+using System.IO;
 using System.Net.Sockets;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -18,10 +18,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using alpha = Alphaleonis.Win32.Filesystem;
 using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Runtime.InteropServices.ComTypes;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
+using System.Transactions;
 
 //TODO lock file ili Transactionl NTFS, tj detekcija da li smo povukli cijelu verziju !!!!!!
 //    zastitia pokretanja nekompletnog EXEDira treba biti u PowerShellu, ali kako , 
@@ -598,21 +600,38 @@ namespace ArgosyUpdater
                 //spremi odmah da nebude da poslije ne pokupimo u vremenskoj ruspi sto je snimljeno
                 //opet ako pokne copy teba ponistiti ovajsave AAAAAAAAAAAAAAAAAAAAA
 
-
-                foreach (FolderPair fp in conf.settings.FolderPairs)
+                try
                 {
-                    if (!fp.Sync) continue;  //skip where Sync is false
+                    foreach (FolderPair fp in conf.settings.FolderPairs)
+                    {
+                        if (!fp.Sync) continue;  //skip where Sync is false
 
-                    //commands goes before sync, if there is RESTAR well doit , if som command needs to be done after sync we will think about that later  
-                    CheckCommand(errors, commands, fp.SharePath, fp.LocalPath);
+                        //commands goes before sync, if there is RESTAR well doit , if som command needs to be done after sync we will think about that later  
+                        CheckCommand(errors, commands, fp.SharePath, fp.LocalPath);
 
-                    //this sync root folder end subfolders/files
-                    DirectoryCopy(fp.SharePath, fp.LocalPath, errors, changes, fp.IgnorePaths, fp.SharePath);
+                        //new ver in transaction
+                        using (TransactionScope ts = new TransactionScope(TransactionScopeOption.RequiresNew))
+                        {
+                            //KernelTransaction is in AlphaFS
+                            alpha.KernelTransaction kt = new alpha.KernelTransaction(Transaction.Current);
 
-                    if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
+                            //this sync root folder end subfolders/files
+                            DirectoryCopy(kt, fp.SharePath, fp.LocalPath, errors, changes, fp.IgnorePaths, fp.SharePath);
 
+                            //if there were errors , do rolback, we wont change general functioning of this program , so we can later decide to implemet as it was , opportunistic copying of files without "integrity of whole folder"
+                            if (!thereWereErros)
+                            {
+                                ts.Complete();
+                            }
+                        }
+
+                        //clen not in transaction
+                        if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
+
+                    }
+                } catch (Exception ex) {
+                    AddError(ex, errors, "", "");
                 }
-
 
                 if (changes.Length > 0)
                 {
@@ -674,6 +693,16 @@ namespace ArgosyUpdater
             {
                 //neke teze greske koij enisu pohendlane pri syncu
                 string errorFile = Path.Combine(programData, "_AppError.txt");
+                File.WriteAllText(errorFile, "ERROR : " + ex.Message + Environment.NewLine + ex.StackTrace);
+                if (ex.InnerException != null) {
+                    File.WriteAllText(errorFile, "INNER : " + ex.InnerException.Message + Environment.NewLine + ex.InnerException.StackTrace);
+
+                    if (ex.InnerException.InnerException != null)
+                    {
+                        File.WriteAllText(errorFile, "INNER : " + ex.InnerException.InnerException.Message + Environment.NewLine + ex.InnerException.InnerException.StackTrace);
+                    }
+                }
+
                 File.WriteAllText(errorFile, ex.Message + Environment.NewLine + ex.StackTrace);
                 if (conf.settings.ShowNotifications) trayIcon.ShowBalloonTip(3000, "Error syncing", ex.Message + Environment.NewLine + ex.StackTrace, ToolTipIcon.Error);
                 trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
@@ -1093,7 +1122,7 @@ namespace ArgosyUpdater
             //Process.Start(startInfo);
         }
 
-        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
+        private static void DirectoryCopy(alpha.KernelTransaction kt, string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
         {
             try
             {
@@ -1101,7 +1130,7 @@ namespace ArgosyUpdater
 
                 foreach (string path in ignorePaths)
                 {
-                    string dir1 = Path.Combine(currSourceRootParm, path).TrimEnd('\\');
+                    string dir1 = alpha.Path.Combine(currSourceRootParm, path).TrimEnd('\\');
                     string dir2 = sourceDirName.TrimEnd('\\');
 
                     if (dir1 == dir2) { return; }
@@ -1111,12 +1140,11 @@ namespace ArgosyUpdater
                 DirectoryInfo dir = new DirectoryInfo(sourceDirName);
 
                 //If the destination directory doesn't exist, create it.
-                if (!Directory.Exists(destDirName))
+                if (!alpha.Directory.ExistsTransacted(kt, destDirName))
                 {
                
                         changes.AppendLine("CREATE DIR : " + destDirName);
-                        Directory.CreateDirectory(destDirName);
-               
+                        alpha.Directory.CreateDirectoryTransacted(kt, destDirName);
                 }
 
                 //Get the files in the directory and copy them to the new location.
@@ -1128,19 +1156,21 @@ namespace ArgosyUpdater
                     {
                         temppath = Path.Combine(destDirName, file.Name);
 
-                        if (File.Exists(temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
+                        if (alpha.File.ExistsTransacted(kt, temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
                         {
-                            if (file.LastWriteTime > File.GetLastWriteTime(temppath))
+                            if (file.LastWriteTime > alpha.File.GetLastWriteTimeTransacted(kt, temppath))
                             {
                                 changes.AppendLine("COPY NEWER FILE : " + temppath);
-                                file.CopyTo(temppath, true);
-                                //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
+                                   //file.CopyTo(temppath, true);
+                                alpha.File.CopyTransacted(kt, file.FullName, temppath, true);
+                                   //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
                             }
                         }
                         else //ima samo na shareu dakle kopiraj bez provjere
                         {
                             changes.AppendLine("COPY MISSING FILE : " + temppath);
-                            file.CopyTo(temppath, true);
+                            //file.CopyTo(temppath, true);
+                            alpha.File.CopyTransacted(kt, file.FullName, temppath, alpha.CopyOptions.None );
                         }
                     }
                     catch (Exception ex)
@@ -1156,8 +1186,8 @@ namespace ArgosyUpdater
                 {
                     string temppath="";
                     try { 
-                        temppath = Path.Combine(destDirName, subdir.Name);
-                        DirectoryCopy(subdir.FullName, temppath, errors, changes, ignorePaths , currSourceRootParm);
+                        temppath = alpha.Path.Combine(destDirName, subdir.Name);
+                        DirectoryCopy(kt, subdir.FullName, temppath, errors, changes, ignorePaths , currSourceRootParm);
                     }
                     catch (Exception ex)
                     {
@@ -1175,7 +1205,7 @@ namespace ArgosyUpdater
             } 
         }
 
-        private static void DirectoryClean(string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, bool isRoot)
+        private static void DirectoryClean( string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, bool isRoot)
         {
             //provjeri da li je root dostupan jer inace X.Exists vraca false za sve slucajebe pa se sve pobriše, a necemo to dozvoliti ako je server nedostupan zapravo ili slicno
             //File/dir.Exists sve potrpa u isti koš
@@ -1224,10 +1254,11 @@ namespace ArgosyUpdater
                     {
                         changes.AppendLine("DELETE MISSING FOLDER : " + subdir.FullName);
                         subdir.Delete(true);
+ 
                     } else
                     {
-                        string temppathDirDest = Path.Combine(destDirName, subdir.Name);
-                        DirectoryClean(temppathDir, temppathDirDest, errors, changes, false);
+                        string temppathDirDest = alpha.Path.Combine(destDirName, subdir.Name);
+                        DirectoryClean( temppathDir, temppathDirDest, errors, changes, false);
                     }
                 }
                 catch (Exception ex)
