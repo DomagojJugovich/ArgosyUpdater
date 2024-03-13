@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -32,6 +33,11 @@ namespace ArgosyUpdater
             _sb.AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + value);
             NotifyProgress?.Invoke(value);
             return this;
+        }
+
+        public void Append(string txt)
+        {
+            _sb.Append(txt);
         }
 
         public string ToString() { return _sb.ToString(); }

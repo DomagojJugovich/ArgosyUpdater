@@ -18,12 +18,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using alpha = Alphaleonis.Win32.Filesystem;
 using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Runtime.InteropServices.ComTypes;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 using System.Transactions;
+
 
 //TODO lock file ili Transactionl NTFS, tj detekcija da li smo povukli cijelu verziju !!!!!!
 //    zastitia pokretanja nekompletnog EXEDira treba biti u PowerShellu, ali kako , 
@@ -125,7 +125,7 @@ namespace ArgosyUpdater
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Exception: " + ex.GetType().ToString() + "MSG:" + ex.Message + Environment.NewLine + "STACK: " + ex.StackTrace, "ArgosyUpdater : Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Exception: " + ex.GetType().ToString() + "MSG:" + ex.Message + Environment.NewLine + "STACK: " + ex.StackTrace, "ArgosyWatcher : Error",  MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Application.Exit();
                 Environment.Exit(-1);
             }
@@ -336,7 +336,7 @@ namespace ArgosyUpdater
 
             if (conf.settings== null || conf.settings.FolderPairs == null )
             {
-                MessageBox.Show("Setting/paths are empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Setting/paths are empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
@@ -344,7 +344,7 @@ namespace ArgosyUpdater
             {
                 if ( String.IsNullOrEmpty(pair.SharePath) || String.IsNullOrEmpty(pair.LocalPath))
                 {
-                    MessageBox.Show("SharePath or  LocalPath is empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("SharePath or  LocalPath is empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     Environment.Exit(-1);
                 }
             }
@@ -352,13 +352,13 @@ namespace ArgosyUpdater
 
             if (String.IsNullOrEmpty(conf.settings.TrayIconText))
             {
-                MessageBox.Show("TrayIconText setting is empty !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("TrayIconText setting is empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
             if (conf.settings.TimerInterval < 60)
             {
-                MessageBox.Show("TimerInterval is less that 60 sec !", "Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("TimerInterval is less that 60 sec !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
 
@@ -480,7 +480,7 @@ namespace ArgosyUpdater
                 {
                     if (!(p.Id == Process.GetCurrentProcess().Id))
                     {
-                        MessageBox.Show("Please close existing app", "ArgosyUpdater : Another instance detected", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show("Please close existing app", "ArgosyWatcher : Another instance detected", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         Environment.Exit(0);
                     }
                 }
@@ -600,6 +600,8 @@ namespace ArgosyUpdater
                 //spremi odmah da nebude da poslije ne pokupimo u vremenskoj ruspi sto je snimljeno
                 //opet ako pokne copy teba ponistiti ovajsave AAAAAAAAAAAAAAAAAAAAA
 
+                string errlock;
+
                 try
                 {
                     foreach (FolderPair fp in conf.settings.FolderPairs)
@@ -609,23 +611,37 @@ namespace ArgosyUpdater
                         //commands goes before sync, if there is RESTAR well doit , if som command needs to be done after sync we will think about that later  
                         CheckCommand(errors, commands, fp.SharePath, fp.LocalPath);
 
-                        //new ver in transaction
-                        using (TransactionScope ts = new TransactionScope(TransactionScopeOption.RequiresNew))
+                        string flock = Path.Combine(fp.LocalPath, "SYNC_LOCK.LCK");
+                        errlock = Path.Combine(fp.LocalPath, "ERR_LOCK.LCK");
+
+                        StringBuilderExt errorsPerFP = null;
+
+                        try
                         {
-                            //KernelTransaction is in AlphaFS
-                            alpha.KernelTransaction kt = new alpha.KernelTransaction(Transaction.Current);
+                            //create lock , global lock by folderPairu
+                            File.Create(flock);
+                            if (File.Exists(errlock)) File.Delete(errlock); //reset, this is new try
+
 
                             //this sync root folder end subfolders/files
-                            DirectoryCopy(kt, fp.SharePath, fp.LocalPath, errors, changes, fp.IgnorePaths, fp.SharePath);
+                            errorsPerFP = new StringBuilderExt();
+                            DirectoryCopy(fp.SharePath, fp.LocalPath, errorsPerFP, changes, fp.IgnorePaths, fp.SharePath);
+                            errors.Append(errorsPerFP.ToString());
 
-                            //if there were errors , do rolback, we wont change general functioning of this program , so we can later decide to implemet as it was , opportunistic copying of files without "integrity of whole folder"
-                            if (!thereWereErros)
-                            {
-                                ts.Complete();
+                        }
+                        catch { throw; }
+                        finally {
+                            //delete LOCK
+                            File.Delete(flock);
+
+                            if (errorsPerFP != null || errorsPerFP.Length > 0) { 
+                                File.Create(errlock);
+                            } else {
+                                if (File.Exists(errlock)) File.Delete(errlock);
                             }
                         }
 
-                        //clen not in transaction
+                        //TODO : check is any file locked in folder ????????? then give up on whole folder
                         if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
 
                     }
@@ -658,11 +674,10 @@ namespace ArgosyUpdater
                     thereWereChanges = false;
                 }
 
-
+                string errorFile = Path.Combine(programData, "_SyncErrors.txt");
                 if (errors.Length > 0)
                 {
                     thereWereErros = true;
-                    string errorFile = Path.Combine(programData, "_SyncErrors.txt");
                     File.WriteAllText(errorFile, errors.ToString());
 
                     errorsShown++;
@@ -674,6 +689,7 @@ namespace ArgosyUpdater
                 else
                 {
                     thereWereErros = false;
+                    File.Delete(errorFile);
                 }
 
 
@@ -1122,7 +1138,7 @@ namespace ArgosyUpdater
             //Process.Start(startInfo);
         }
 
-        private static void DirectoryCopy(alpha.KernelTransaction kt, string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
+        private static void DirectoryCopy(string sourceDirName, string destDirName, StringBuilderExt errors, StringBuilderExt changes, System.ComponentModel.BindingList<string> ignorePaths, string currSourceRootParm)
         {
             try
             {
@@ -1130,7 +1146,7 @@ namespace ArgosyUpdater
 
                 foreach (string path in ignorePaths)
                 {
-                    string dir1 = alpha.Path.Combine(currSourceRootParm, path).TrimEnd('\\');
+                    string dir1 =  Path.Combine(currSourceRootParm, path).TrimEnd('\\');
                     string dir2 = sourceDirName.TrimEnd('\\');
 
                     if (dir1 == dir2) { return; }
@@ -1140,11 +1156,11 @@ namespace ArgosyUpdater
                 DirectoryInfo dir = new DirectoryInfo(sourceDirName);
 
                 //If the destination directory doesn't exist, create it.
-                if (!alpha.Directory.ExistsTransacted(kt, destDirName))
+                if (Directory.Exists(destDirName))
                 {
                
                         changes.AppendLine("CREATE DIR : " + destDirName);
-                        alpha.Directory.CreateDirectoryTransacted(kt, destDirName);
+                        Directory.CreateDirectory(destDirName);
                 }
 
                 //Get the files in the directory and copy them to the new location.
@@ -1156,13 +1172,13 @@ namespace ArgosyUpdater
                     {
                         temppath = Path.Combine(destDirName, file.Name);
 
-                        if (alpha.File.ExistsTransacted(kt, temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
+                        if (File.Exists( temppath)) //ako postoje obadvije fajle kopiraj ako je na shareu novija
                         {
-                            if (file.LastWriteTime > alpha.File.GetLastWriteTimeTransacted(kt, temppath))
+                            if (file.LastWriteTime > File.GetLastWriteTime(temppath))
                             {
                                 changes.AppendLine("COPY NEWER FILE : " + temppath);
                                    //file.CopyTo(temppath, true);
-                                alpha.File.CopyTransacted(kt, file.FullName, temppath, true);
+                                File.Copy(file.FullName, temppath, true);
                                    //CopyFile(file.FullName, temppath, true); //ovo bi mozda bolje hendlalo lockove ali ovo iznad radi ok tako da je ok
                             }
                         }
@@ -1170,7 +1186,7 @@ namespace ArgosyUpdater
                         {
                             changes.AppendLine("COPY MISSING FILE : " + temppath);
                             //file.CopyTo(temppath, true);
-                            alpha.File.CopyTransacted(kt, file.FullName, temppath, alpha.CopyOptions.None );
+                            File.Copy(file.FullName, temppath, true);
                         }
                     }
                     catch (Exception ex)
@@ -1186,8 +1202,8 @@ namespace ArgosyUpdater
                 {
                     string temppath="";
                     try { 
-                        temppath = alpha.Path.Combine(destDirName, subdir.Name);
-                        DirectoryCopy(kt, subdir.FullName, temppath, errors, changes, ignorePaths , currSourceRootParm);
+                        temppath = Path.Combine(destDirName, subdir.Name);
+                        DirectoryCopy(subdir.FullName, temppath, errors, changes, ignorePaths , currSourceRootParm);
                     }
                     catch (Exception ex)
                     {
@@ -1257,7 +1273,7 @@ namespace ArgosyUpdater
  
                     } else
                     {
-                        string temppathDirDest = alpha.Path.Combine(destDirName, subdir.Name);
+                        string temppathDirDest = Path.Combine(destDirName, subdir.Name);
                         DirectoryClean( temppathDir, temppathDirDest, errors, changes, false);
                     }
                 }
@@ -1301,14 +1317,14 @@ namespace ArgosyUpdater
 
         static void UndandledErrorHandler(object sender, UnhandledExceptionEventArgs args)
         {
-            MessageBox.Show("Exception: " + ((Exception)args.ExceptionObject).GetType().ToString() + Environment.NewLine + "MSG:" + ((Exception)args.ExceptionObject).Message + Environment.NewLine + "STACK: " + ((Exception)args.ExceptionObject).StackTrace, "ArgosyUpdater : Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("Exception: " + ((Exception)args.ExceptionObject).GetType().ToString() + Environment.NewLine + "MSG:" + ((Exception)args.ExceptionObject).Message + Environment.NewLine + "STACK: " + ((Exception)args.ExceptionObject).StackTrace, "ArgosyWatcher  : Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             //Application.Exit();
             //Environment.Exit(-1);
         }
 
         static void ErrorHandler(object sender, ThreadExceptionEventArgs args)
         {
-            MessageBox.Show("Exception: " + ((Exception)args.Exception).GetType().ToString() + Environment.NewLine +  "MSG:" + ((Exception)args.Exception).Message + Environment.NewLine + "STACK: " + ((Exception)args.Exception).StackTrace, "ArgosyUpdater : Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("Exception: " + ((Exception)args.Exception).GetType().ToString() + Environment.NewLine +  "MSG:" + ((Exception)args.Exception).Message + Environment.NewLine + "STACK: " + ((Exception)args.Exception).StackTrace, "ArgosyWatcher  : Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             //Application.Exit();
             //Environment.Exit(-1);
         }
