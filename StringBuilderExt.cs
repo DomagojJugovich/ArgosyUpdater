@@ -31,8 +31,30 @@ namespace ArgosyUpdater
         public StringBuilderExt AppendLine(string value)
         {
             _sb.AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + value);
-            NotifyProgress?.Invoke(value);
+            RaiseNotify(value);
             return this;
+        }
+
+        //display only: a failing subscriber (e.g. closed progress window) must not break the sync that is logging,
+        //it is unsubscribed and noted once in the log itself so it stays visible
+        private void RaiseNotify(string value)
+        {
+            var handlers = NotifyProgress;
+            if (handlers == null) return;
+
+            foreach (Notify handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(value);
+                }
+                catch (Exception ex)
+                {
+                    NotifyProgress -= handler;
+                    _sb.AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + "PROGRESS DISPLAY FAILED, DETACHED : " + ex.GetType().Name + " " + ex.Message);
+                    System.Diagnostics.Debug.WriteLine(ex);
+                }
+            }
         }
 
         public void Append(string txt)

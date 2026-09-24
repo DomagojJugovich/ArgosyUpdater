@@ -1,0 +1,15 @@
+{
+  "ShareRoot": "\\\\bepo\\ARGOSY",
+  "DeltaDir": "_DELTA",
+  "VersionedDirs": [ "EXEDIR", "EXEDIR_X86" ],
+  "VersionPrefix": "Argosy",
+  "ReadyMarker": "_READY",
+  "RequireReadyMarker": false,
+  "QuietMinutes": 10,
+  "ExcludeFiles": [ "Thumbs.db", "desktop.ini" ],
+  "RetentionDays": 90,
+  "MinPatchFileSize": 65536,
+  "MaxPatchRatio": 0.8,
+  "LogDir": "logs",
+  "KeepLogs": 30
+}

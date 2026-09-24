@@ -52,6 +52,9 @@ namespace ArgosyUpdater
         static bool thereWereChanges = false;
         static Config conf = null;
 
+        const string SyncLockFile = "SYNC_LOCK.LCK";
+        const string ErrLockFile = "ERR_LOCK.LCK";
+
         static string programData;
 
 
@@ -67,6 +70,10 @@ namespace ArgosyUpdater
                 AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(UndandledErrorHandler);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+#if DEBUG
+                //file work runs on a worker thread (RunPumping), catch UI access from it also without debugger
+                Control.CheckForIllegalCrossThreadCalls = true;
+#endif
 
                 CheckProgramDataFolder();
 
@@ -317,15 +324,20 @@ namespace ArgosyUpdater
             Extensions.XShortCut.Create(desktopLink, fullExe, appPath, "Argosy updater, maintains local app");
         }
 
+        // settings of the running exe: running copy in ProgramData, or exe folder when started with "debug" (no running copy)
+        private static string SettingsFile()
+        {
+            string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            return Path.Combine(strExeFilePath, "AppSettings.json");
+        }
+
         private static void CheckSettings(string jsonSett)
         {
             string jsonString;
 
             if (jsonSett == null)
             {
-                string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                string fileName = System.IO.Path.Combine(strExeFilePath, "AppSettings.json");
-                jsonString = File.ReadAllText(fileName);
+                jsonString = File.ReadAllText(SettingsFile());
             } else
             {
                 jsonString = jsonSett;
@@ -333,35 +345,27 @@ namespace ArgosyUpdater
             
             conf = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
 
-
-            if (conf.settings== null || conf.settings.FolderPairs == null )
+            string error = ValidateSettings(conf);
+            if (error != null)
             {
-                MessageBox.Show("Setting/paths are empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(error, "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(-1);
             }
+        }
 
-            foreach (var pair in conf.settings.FolderPairs)
+        // null = settings are ok
+        private static string ValidateSettings(Config c)
+        {
+            if (c.settings == null || c.settings.FolderPairs == null) return "Setting/paths are empty !";
+
+            foreach (var pair in c.settings.FolderPairs)
             {
-                if ( String.IsNullOrEmpty(pair.SharePath) || String.IsNullOrEmpty(pair.LocalPath))
-                {
-                    MessageBox.Show("SharePath or  LocalPath is empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    Environment.Exit(-1);
-                }
+                if (String.IsNullOrEmpty(pair.SharePath) || String.IsNullOrEmpty(pair.LocalPath)) return "SharePath or  LocalPath is empty !";
             }
 
-
-            if (String.IsNullOrEmpty(conf.settings.TrayIconText))
-            {
-                MessageBox.Show("TrayIconText setting is empty !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(-1);
-            }
-
-            if (conf.settings.TimerInterval < 60)
-            {
-                MessageBox.Show("TimerInterval is less that 60 sec !", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(-1);
-            }
-
+            if (String.IsNullOrEmpty(c.settings.TrayIconText)) return "TrayIconText setting is empty !";
+            if (c.settings.TimerInterval < 60) return "TimerInterval is less that 60 sec !";
+            return null;
         }
 
         private static void MakeRunningCopy()
@@ -489,6 +493,10 @@ namespace ArgosyUpdater
 
         private static void MenuExit(object sender, EventArgs e)
         {
+            //menu works during sync (RunPumping), exit kills a half built version, it is cleaned up and rebuilt on next start
+            if (syncRunning && MessageBox.Show("Sync is in progress, a version that is being built will be built again on next start." + Environment.NewLine + "Exit anyway?",
+                "ArgosyWatcher", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
             Application.Exit();
             Environment.Exit(0);
         }
@@ -500,12 +508,28 @@ namespace ArgosyUpdater
             //processStartInfo.Arguments = Path.Combine(appPath, "AppSettings.json");
             //Process.Start(processStartInfo);
 
-            string fileNameJson = Path.Combine(programData, "AppSettings.json");
+            //menu works during sync (RunPumping), sync uses the settings it started with
+            if (syncRunning)
+            {
+                MessageBox.Show("Sync is in progress, try again when it is done.", "ArgosyWatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            //same file CheckSettings reads (was ProgramData, which does not exist in debug mode)
+            string fileNameJson = SettingsFile();
             string jsonString = File.ReadAllText(fileNameJson);
             Config confForEdit = (Config)ZeroDep.Json.Deserialize(jsonString, typeof(Config));
 
             var form = new EditConfigForm(confForEdit.settings);
             form.ShowDialog();
+
+            //invalid settings are not saved, CheckSettings would exit the app and it would not start again with them
+            string error = ValidateSettings(confForEdit);
+            if (error != null)
+            {
+                MessageBox.Show(error + Environment.NewLine + "Settings are not saved.", "ArgosyWatcher Setting errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
             string jsonToSave = ZeroDep.Json.SerializeFormatted( confForEdit  );
             File.WriteAllText(fileNameJson, jsonToSave);
@@ -531,6 +555,13 @@ namespace ArgosyUpdater
 
         private static void MenuCheckNow(object sender, EventArgs e)
         {
+            if (syncRunning)
+            {
+                //user clicked, so tell even when balloons are off
+                if (conf.settings.ShowNotifications) trayIcon.ShowBalloonTip(3000, "Sync in progress", "Check is already running, it will finish on its own.", ToolTipIcon.Info);
+                else MessageBox.Show("Check is already running, it will finish on its own.", "ArgosyWatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             CheckNetworkShare(null,null);
         }
 
@@ -566,8 +597,37 @@ namespace ArgosyUpdater
             return ret;
         }
         
+        // file work runs on a worker thread while messages are pumped (RunPumping), so CHECK NOW or the timer can come in again
+        static bool syncRunning = false;
+
+        // runs action on a worker thread and keeps the message loop going until it is done, exceptions are rethrown here
+        static void RunPumping(Action action)
+        {
+            Task task = Task.Run(action);
+            while (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(100))
+            {
+                Application.DoEvents();
+            }
+            task.GetAwaiter().GetResult();
+        }
+
+        static void CloseLater(Form form, int ms)
+        {
+            var closeTimer = new System.Windows.Forms.Timer { Interval = ms };
+            closeTimer.Tick += (s, a) =>
+            {
+                closeTimer.Stop();
+                closeTimer.Dispose();
+                if (!form.IsDisposed) form.Close();
+            };
+            closeTimer.Start();
+        }
+
         static void CheckNetworkShare(object sender, EventArgs e)
         {
+            if (syncRunning) return;
+            syncRunning = true;
+
             Progress frmProgress=null;
 
             try
@@ -608,41 +668,74 @@ namespace ArgosyUpdater
                     {
                         if (!fp.Sync) continue;  //skip where Sync is false
 
-                        //commands goes before sync, if there is RESTAR well doit , if som command needs to be done after sync we will think about that later  
-                        CheckCommand(errors, commands, fp.SharePath, fp.LocalPath);
+                        //all share I/O runs on a worker thread (RunPumping): building a version takes minutes and
+                        //on an unreachable share every call waits for the SMB timeout, both would freeze the tray
 
-                        string flock = Path.Combine(fp.LocalPath, "SYNC_LOCK.LCK");
-                        errlock = Path.Combine(fp.LocalPath, "ERR_LOCK.LCK");
+                        //commands goes before sync, if there is RESTAR well doit , if som command needs to be done after sync we will think about that later
+                        RunPumping(() => CheckCommand(errors, commands, fp.SharePath, fp.LocalPath));
 
-                        StringBuilderExt errorsPerFP = null;
+                        string flock = Path.Combine(fp.LocalPath, SyncLockFile);
+                        errlock = Path.Combine(fp.LocalPath, ErrLockFile);
+
+                        StringBuilderExt errorsPerFP = new StringBuilderExt();
+                        bool propagateDeletes = conf.settings.PropagateDeletes;
 
                         try
                         {
+                            //new PC / new folder pair: LocalPath does not exist yet, lock file needs it (DirectoryCopy would create it, but too late)
+                            Directory.CreateDirectory(fp.LocalPath);
+
                             //create lock , global lock by folderPairu
-                            File.Create(flock);
+                            File.Create(flock).Dispose();
                             if (File.Exists(errlock)) File.Delete(errlock); //reset, this is new try
 
+                            RunPumping(() =>
+                            {
+                                //versioned dirs (EXEDIR) with deltas on server are not copied file by file, only newest version is built by VersionSync
+                                //delta dir itself is never synced
+                                List<string> versionedDirs = VersionSync.GetManagedDirs(fp);
+                                var ignorePaths = new BindingList<string>(fp.IgnorePaths != null ? fp.IgnorePaths.ToList() : new List<string>());
+                                if (!String.IsNullOrEmpty(fp.DeltaDir)) ignorePaths.Add(fp.DeltaDir);
+                                foreach (string vd in versionedDirs) ignorePaths.Add(vd);
 
-                            //this sync root folder end subfolders/files
-                            errorsPerFP = new StringBuilderExt();
-                            DirectoryCopy(fp.SharePath, fp.LocalPath, errorsPerFP, changes, fp.IgnorePaths, fp.SharePath);
-                            errors.Append(errorsPerFP.ToString());
+                                //this sync root folder end subfolders/files
+                                DirectoryCopy(fp.SharePath, fp.LocalPath, errorsPerFP, changes, ignorePaths, fp.SharePath);
 
+                                foreach (string vd in versionedDirs)
+                                {
+                                    VersionSync.Sync(fp, vd, errorsPerFP, changes);
+                                }
+
+                                //TODO : check is any file locked in folder ????????? then give up on whole folder
+                                //inside the lock so its errors count for ERR_LOCK too, lock files are skipped by DirectoryClean
+                                if (propagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errorsPerFP, changes, true); }
+                            });
                         }
-                        catch { throw; }
+                        catch (Exception ex)
+                        {
+                            //aborted sync of this folder pair counts for ERR_LOCK, next folder pair is still synced
+                            AddError(ex, errorsPerFP, fp.LocalPath, fp.SharePath);
+                        }
                         finally {
-                            //delete LOCK
-                            File.Delete(flock);
+                            //lock files may fail too (LocalPath not creatable, drive gone), that must not stop other folder pairs
+                            try
+                            {
+                                //delete LOCK
+                                File.Delete(flock);
 
-                            if (errorsPerFP != null || errorsPerFP.Length > 0) { 
-                                File.Create(errlock);
-                            } else {
-                                if (File.Exists(errlock)) File.Delete(errlock);
+                                if (errorsPerFP.Length > 0) {
+                                    File.Create(errlock).Dispose();
+                                } else {
+                                    if (File.Exists(errlock)) File.Delete(errlock);
+                                }
                             }
-                        }
+                            catch (Exception ex)
+                            {
+                                AddError(ex, errorsPerFP, flock, errlock);
+                            }
 
-                        //TODO : check is any file locked in folder ????????? then give up on whole folder
-                        if (conf.settings.PropagateDeletes) { DirectoryClean(fp.SharePath, fp.LocalPath, errors, changes, true); }
+                            errors.Append(errorsPerFP.ToString());
+                        }
 
                     }
                 } catch (Exception ex) {
@@ -674,6 +767,21 @@ namespace ArgosyUpdater
                     thereWereChanges = false;
                 }
 
+                DateTime now = SaveLastSync(errors); //zbog novog nacine usporedbe maltene nepotrebno
+
+                //SQL connect timeout off the network, keep the tray responsive
+                bool withLogs = thereWereChanges || errors.Length > 0;
+                RunPumping(() =>
+                {
+                    if (withLogs) {
+                        UpdateDb(errors, changes, versions, now);
+                    } else
+                    {
+                        UpdateDb(now);
+                    }
+                });
+
+                //after DB and last sync, their errors go to the file / icon too
                 string errorFile = Path.Combine(programData, "_SyncErrors.txt");
                 if (errors.Length > 0)
                 {
@@ -691,18 +799,6 @@ namespace ArgosyUpdater
                     thereWereErros = false;
                     File.Delete(errorFile);
                 }
-
-
-                DateTime now = SaveLastSync(errors); //zbog novog nacine usporedbe maltene nepotrebno
-
-                if (thereWereChanges || thereWereErros) { 
-                    UpdateDb(errors, changes, versions, now); 
-                } else
-                {
-                    UpdateDb(now);
-                }
-                
-
 
             }
             catch (Exception ex)
@@ -725,9 +821,8 @@ namespace ArgosyUpdater
             }
             finally
             {
-                Thread.Sleep(5000);
-
-                if (frmProgress != null) frmProgress.Close();
+                //progress stays visible 5 s like before, but without blocking the UI thread (Thread.Sleep froze the tray every run)
+                if (frmProgress != null) CloseLater(frmProgress, 5000);
 
                 if (thereWereErros) {
                     trayIcon.Icon = new System.Drawing.Icon("ArgosyUpdaterError.ico");
@@ -736,6 +831,7 @@ namespace ArgosyUpdater
                 }
 
                 timer.Start(); //pokreni ponovo jer smo zaustavili na pocetku
+                syncRunning = false;
             }
         }
 
@@ -1149,14 +1245,15 @@ namespace ArgosyUpdater
                     string dir1 =  Path.Combine(currSourceRootParm, path).TrimEnd('\\');
                     string dir2 = sourceDirName.TrimEnd('\\');
 
-                    if (dir1 == dir2) { return; }
+                    //windows paths, config may not match case on disk (EXEDIR / _DELTA must never leak into plain copy)
+                    if (String.Equals(dir1, dir2, StringComparison.OrdinalIgnoreCase)) { return; }
                 }
 
                 // Get the subdirectories for the specified directory.
                 DirectoryInfo dir = new DirectoryInfo(sourceDirName);
 
                 //If the destination directory doesn't exist, create it.
-                if (Directory.Exists(destDirName))
+                if (!Directory.Exists(destDirName))
                 {
                
                         changes.AppendLine("CREATE DIR : " + destDirName);
@@ -1237,6 +1334,9 @@ namespace ArgosyUpdater
             FileInfo[] files = dir.GetFiles();
             foreach (FileInfo file in files)
             {
+                //our own lock files exist only locally
+                if (isRoot && (file.Name == SyncLockFile || file.Name == ErrLockFile)) continue;
+
                 string temppath = "";
                 try
                 {
@@ -1306,7 +1406,7 @@ namespace ArgosyUpdater
                 }
         }
 
-        private static void AddError(Exception ex, StringBuilderExt sb, string path, string path2)
+        internal static void AddError(Exception ex, StringBuilderExt sb, string path, string path2)
         {
             sb.AppendLine(" PATH1: " + path + " PATH2: " +  path2 + "  MSG:" + ex.Message + Environment.NewLine + ex.StackTrace);
             if (ex.InnerException != null)

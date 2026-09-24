@@ -17,6 +17,13 @@ namespace ArgosyUpdater
         [EditorAttribute(typeof(FolderNameEditor2), typeof(System.Drawing.Design.UITypeEditor))]
         public string LocalPath { get; set; }
         public BindingList<string> IgnorePaths { get; set; }
+        //folders with side by side versions (EXEDIR), synced by VersionSync (only newest version, by deltas) when server has manifests for them
+        public BindingList<string> VersionedDirs { get; set; }
+        public string VersionPrefix { get; set; } = "Argosy";
+        //relative to SharePath, written by ArgosyDeltaBuilder, never synced itself
+        public string DeltaDir { get; set; } = "_DELTA";
+        //True = VersionedDirs never fall back to plain file sync (all versions), missing delta infrastructure is an error
+        public Boolean DeltaSyncRequired { get; set; } = false;
     }
 
     public class Config
