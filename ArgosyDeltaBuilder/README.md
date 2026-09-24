@@ -71,7 +71,7 @@ Octodiff + gzip na promijenjenim DLL-ovima: `WinFink.dll` 41.5 MB -> 4.1 MB, `Wi
 
 ```json
 "IgnorePaths": [ "APP", "DfsrPrivate", "_DELTA" ],
-"VersionedDirs": [ "EXEDIR", "EXEDIR_X86" ],
+"VersionedDirs": [ "EXEDIR" ],
 "VersionPrefix": "Argosy",
 "DeltaDir": "_DELTA",
 "DeltaSyncRequired": "False"

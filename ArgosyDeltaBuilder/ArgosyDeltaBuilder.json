@@ -1,7 +1,7 @@
 {
   "ShareRoot": "\\\\bepo\\ARGOSY",
   "DeltaDir": "_DELTA",
-  "VersionedDirs": [ "EXEDIR", "EXEDIR_X86" ],
+  "VersionedDirs": [ "EXEDIR" ],
   "VersionPrefix": "Argosy",
   "ReadyMarker": "_READY",
   "RequireReadyMarker": false,
