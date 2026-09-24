@@ -22,13 +22,9 @@ using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Runtime.InteropServices.ComTypes;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
-using System.Transactions;
 
 
-//TODO lock file ili Transactionl NTFS, tj detekcija da li smo povukli cijelu verziju !!!!!!
-//    zastitia pokretanja nekompletnog EXEDira treba biti u PowerShellu, ali kako , 
 //TODO uptadeDB log, keep last 5 logs !!!!!!!!!!
-//https://github.com/goldfix/Transactional-NTFS-TxF-.NET/blob/master/DOCUMENTATION.md
 
 
 namespace ArgosyUpdater

@@ -37,7 +37,6 @@ namespace ArgosyUpdater
         public Boolean ReportIPv4Addr { get; set; } = true;
         public Boolean ReportIPv6Addr { get; set; } = false;
         public Boolean PropagateDeletes { get; set; } = true;
-        public Boolean UseNTFSTransactions { get; set; } = true;
         public Boolean ShowProgress { get; set; } = false;
         public Boolean ShowNotifications { get; set; } = true;
         public int TimerInterval { get; set; } = 1200;
