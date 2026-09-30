@@ -180,8 +180,8 @@ namespace ArgosyUpdater
         // Install / update from the folder this exe is started from, by hand (_ArgosyUpdaterInstall.bat) or as SYSTEM
         // from the GPO task on every Group Policy refresh (\\bepo\ArgosyUpdater\ArgosyUpdater.exe install).
         // Idempotent and cheap when nothing changed: copies only files that differ in size or LastWriteTime,
-        // creates shortcuts only if missing / pointing elsewhere. Files in Program Files are never locked,
-        // the updater runs from its copy in ProgramData.
+        // creates shortcuts only if missing / pointing elsewhere. The updater runs from its copy in ProgramData,
+        // Program Files is locked only while that copy is made at logon / RESTART (copy is retried).
         private static void InstallApp()
         {
             try
@@ -210,7 +210,14 @@ namespace ArgosyUpdater
                         if (dest.Exists && dest.Length == file.Length && dest.LastWriteTimeUtc == file.LastWriteTimeUtc) continue;
 
                         Console.WriteLine("Copy : " + fullFname);
-                        file.CopyTo(fullFname, true);
+                        //ReadOnly comes along from the share and would block the next overwrite
+                        if (dest.Exists && (dest.Attributes & FileAttributes.ReadOnly) != 0) dest.Attributes &= ~FileAttributes.ReadOnly;
+                        //the Program Files exe itself runs ~5 s at every logon / RESTART (before MakeRunningCopy), wait it out
+                        for (int attempt = 1; ; attempt++)
+                        {
+                            try { file.CopyTo(fullFname, true); break; }
+                            catch (IOException) when (attempt < 6) { Thread.Sleep(3000); }
+                        }
                         copied++;
                     }
                 }

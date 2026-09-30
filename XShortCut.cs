@@ -8,9 +8,13 @@ namespace ArgosyUpdater.Extensions
         public static bool PointsTo(string fullPathToLink, string fullPathToTargetExe)
         {
             if (!System.IO.File.Exists(fullPathToLink)) return false;
-            var shell = new WshShell();
-            var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink); //loads the existing one
-            return String.Equals(link.TargetPath, fullPathToTargetExe, StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                var shell = new WshShell();
+                var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink); //loads the existing one
+                return String.Equals(link.TargetPath, fullPathToTargetExe, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; } //corrupt / unreadable link, Create replaces it
         }
 
 
