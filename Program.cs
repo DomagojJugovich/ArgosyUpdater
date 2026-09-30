@@ -204,9 +204,12 @@ namespace ArgosyUpdater
                 }
 
 
-                //dozvoli izmjenu settingsa, ma svega na kraju i program datga radi logova
-                GrantAccess(appPath);
-                GrantAccess(programData);
+                //Program Files: updater only reads there (it runs from its copy in ProgramData), no extra rights.
+                //Older versions gave Everyone FullControl, any user could replace the exe other users start at logon.
+                RemoveEveryoneAccess(appPath);
+                //ProgramData: running copy, settings and logs, every user of the PC must be able to refresh them
+                RemoveEveryoneAccess(programData);
+                GrantUsersModify(programData);
 
                 CheckShortcut();
 
@@ -286,19 +289,31 @@ namespace ArgosyUpdater
 
 
 
-        private static void GrantAccess(string fullPath)
+        // explicit Allow entries for Everyone (added by older installs), inherited entries stay
+        private static void RemoveEveryoneAccess(string fullPath)
         {
-            Console.WriteLine("GrantAccess " + fullPath);
+            Console.WriteLine("RemoveEveryoneAccess " + fullPath);
+            DirectoryInfo dInfo = new DirectoryInfo(fullPath);
+            DirectorySecurity dSecurity = dInfo.GetAccessControl();
+            dSecurity.RemoveAccessRuleAll(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            dInfo.SetAccessControl(dSecurity);
+        }
+
+        // BUILTIN\Users (by SID, name is localized) Modify on folder, subfolders and files
+        private static void GrantUsersModify(string fullPath)
+        {
+            Console.WriteLine("GrantUsersModify " + fullPath);
             DirectoryInfo dInfo = new DirectoryInfo(fullPath);
             DirectorySecurity dSecurity = dInfo.GetAccessControl();
             dSecurity.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
-                FileSystemRights.FullControl,
-                InheritanceFlags.ObjectInherit |
-                   InheritanceFlags.ContainerInherit,
-                PropagationFlags.NoPropagateInherit,
+                new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
+                FileSystemRights.Modify,
+                InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit,
+                PropagationFlags.None,
                 AccessControlType.Allow));
-
             dInfo.SetAccessControl(dSecurity);
         }
 

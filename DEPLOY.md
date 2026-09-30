@@ -6,22 +6,31 @@
 | Datum | 2026-09-29 |
 | Autori | Domagoj Jugović, Claude |
 | Status | Draft |
-| Tehnologije | Group Policy Preferences (Immediate Task), Windows PowerShell 5.1, robocopy |
+| Tehnologije | Group Policy Preferences (Immediate Task), Windows PowerShell 5.1, `ArgosyUpdater.exe install`, robocopy /L |
 | Projekti | ArgosyUpdater |
 
 ## Koncept
 
 `\\bepo\ArgosyUpdater` je izvor. GPO na svakoj stanici pokreće `Deploy-ArgosyUpdater.ps1` (kao SYSTEM) pri svakom Group Policy refreshu: pri bootu, pa svakih ~90 min.
 
-| Korak | Što radi |
+Sav posao radi `ArgosyUpdater.exe install` sa sharea, isto kao `_ArgosyUpdaterInstall.bat`. Kod za kopiranje, prava i shortcute (startup i common desktop) tako je na jednom mjestu, u `InstallApp`. Skripta samo odlučuje treba li install. `InstallApp` bezuvjetno kopira sve fileove, pa bi bez te provjere svaki GP refresh povukao ~10 MB.
+
+| Uvjet | Posljedica |
 |---|---|
-| robocopy `/E` share → `C:\Program Files\ArgosyUpdater_1_0` | Kopira samo promijenjene fileove i nikad ne briše. Prazan ili nedostupan share ne uklanja instalaciju (exit 2). |
-| `C:\ProgramData\ArgosyWatcher` | Folder se napravi ako ne postoji i dobije `BUILTIN\Users: Modify`, da svaki korisnik PC-a može osvježiti running copy. |
-| Startup i desktop shortcut | Isti nazivi kao kod `ArgosyUpdater.exe install`, napravi ih samo ako ih nema. |
+| Nema `ArgosyUpdater.exe` u Program Files ili fali startup/desktop shortcut | install |
+| `robocopy /L` share → Program Files (samo gornja razina, bez same skripte) nađe novi ili noviji file | install |
+| Ništa od navedenog | ništa, exit 0 |
+| Share nema `ArgosyUpdater.exe` | ništa, exit 2 |
+
+Install mora vratiti izlazni kod 5, inače skripta završi s exit 1.
+
+Prava koja install postavlja (od verzije s ovom izmjenom):
+- **`C:\Program Files\ArgosyUpdater_1_0`:** nema dodatnih prava, samo naslijeđena, dakle korisnici samo čitaju. Updater tamo ništa ne piše. `Everyone: FullControl`, koji su dodavale starije verzije, uklanja se, jer je svakom korisniku omogućavao zamjenu exe-a koji se pokreće pri loginu drugih korisnika.
+- **`C:\ProgramData\ArgosyWatcher`:** `BUILTIN\Users: Modify` (preko SID-a), nasljeđuje se na podfoldere i fileove, umjesto `Everyone: FullControl`. Svaki korisnik PC-a može osvježiti running copy, postavke i logove.
 
 Fileovi u Program Files nisu zaključani, jer updater radi iz kopije u `ProgramData`. Nova verzija se pokrene pri sljedećem loginu, ili odmah kad se na shareu osvježi `LastWriteTime` na `\\bepo\ARGOSY\_scripts\_aw_command.txt` (`RESTART`).
 
-Zašto ne GPP **Files**: s akcijom **Update** postojeći file dobije samo nove atribute, sadržaj se ne kopira, pa nova verzija nikad ne bi stigla. **Replace** kopira sve (~10 MB) na svaki refresh svake stanice. Ni jedno ni drugo ne rješava prava na `ProgramData` i shortcut.
+Zašto ne GPP **Files**: s akcijom **Update** postojeći file dobije samo nove atribute, sadržaj se ne kopira, pa nova verzija nikad ne bi stigla. **Replace** kopira sve (~10 MB) na svaki refresh svake stanice. Ni jedno ni drugo ne radi shortcute ni prava, dok ih install radi.
 
 ## GPO (GPMC)
 
@@ -57,8 +66,8 @@ GPO se linka na OU s radnim stanicama. Terminal servere (TSPLUS) treba isključi
 
 | Kod | Značenje |
 |---|---|
-| 0 | OK (robocopy 0–7) |
-| 1 | robocopy ≥ 8 ili druga greška |
+| 0 | ažurno, ili install uspješan (exit 5) |
+| 1 | install nije vratio 5, robocopy `/L` ≥ 8 ili druga greška |
 | 2 | share nema `ArgosyUpdater.exe`, ništa nije dirano |
 
 ## Reference
