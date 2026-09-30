@@ -2,35 +2,32 @@
 
 | | |
 |---|---|
-| Verzija | 0.1 |
-| Datum | 2026-09-29 |
+| Verzija | 0.2 |
+| Datum | 2026-09-30 |
 | Autori | Domagoj Jugović, Claude |
 | Status | Draft |
-| Tehnologije | Group Policy Preferences (Immediate Task), Windows PowerShell 5.1, `ArgosyUpdater.exe install`, robocopy /L |
+| Tehnologije | Group Policy Preferences (Immediate Task), `ArgosyUpdater.exe install` |
 | Projekti | ArgosyUpdater |
 
 ## Koncept
 
-`\\bepo\ArgosyUpdater` je izvor. GPO na svakoj stanici pokreće `Deploy-ArgosyUpdater.ps1` (kao SYSTEM) pri svakom Group Policy refreshu: pri bootu, pa svakih ~90 min.
+`\\bepo\ArgosyUpdater` je izvor. GPO na svakoj stanici pri svakom Group Policy refreshu (pri bootu, pa svakih ~90 min) pokreće `\\bepo\ArgosyUpdater\ArgosyUpdater.exe install`, kao SYSTEM. To je ista komanda koju pokreće `_ArgosyUpdaterInstall.bat` za ručnu instalaciju. Kopiranje, prava i shortcuti su na jednom mjestu, u `InstallApp`.
 
-Sav posao radi `ArgosyUpdater.exe install` sa sharea, isto kao `_ArgosyUpdaterInstall.bat`. Kod za kopiranje, prava i shortcute (startup i common desktop) tako je na jednom mjestu, u `InstallApp`. Skripta samo odlučuje treba li install. `InstallApp` bezuvjetno kopira sve fileove, pa bi bez te provjere svaki GP refresh povukao ~10 MB.
+Nema PowerShell skripte, jer execution policy iz GPO-a (`MachinePolicy`, npr. `AllSigned`) nadjačava `-ExecutionPolicy Bypass` i blokira nepotpisane skripte. Na dio stanica to se i dogodilo. Execution policy se na exe ne odnosi.
 
-| Uvjet | Posljedica |
+Install je idempotentan i ne košta ništa kad nema promjena:
+
+| Korak | Ponašanje |
 |---|---|
-| Nema `ArgosyUpdater.exe` u Program Files ili fali startup/desktop shortcut | install |
-| `robocopy /L` share → Program Files (samo gornja razina, bez same skripte) nađe novi ili noviji file | install |
-| Ništa od navedenog | ništa, exit 0 |
-| Share nema `ArgosyUpdater.exe` | ništa, exit 2 |
-
-Install mora vratiti izlazni kod 5, inače skripta završi s exit 1.
-
-Prava koja install postavlja (od verzije s ovom izmjenom):
-- **`C:\Program Files\ArgosyUpdater_1_0`:** nema dodatnih prava, samo naslijeđena, dakle korisnici samo čitaju. Updater tamo ništa ne piše. `Everyone: FullControl`, koji su dodavale starije verzije, uklanja se, jer je svakom korisniku omogućavao zamjenu exe-a koji se pokreće pri loginu drugih korisnika.
-- **`C:\ProgramData\ArgosyWatcher`:** `BUILTIN\Users: Modify` (preko SID-a), nasljeđuje se na podfoldere i fileove, umjesto `Everyone: FullControl`. Svaki korisnik PC-a može osvježiti running copy, postavke i logove.
+| Fileovi sharea → `C:\Program Files\ArgosyUpdater_1_0` | Kopiraju se samo fileovi kojima se razlikuje veličina ili `LastWriteTime`. Ništa se ne briše. |
+| Prava na `C:\Program Files\ArgosyUpdater_1_0` | Bez dodatnih prava, korisnici samo čitaju. Uklanja se `Everyone: FullControl` koji su dodavale starije verzije. |
+| Prava na `C:\ProgramData\ArgosyWatcher` | `BUILTIN\Users: Modify` (preko SID-a, nasljeđuje se) umjesto `Everyone: FullControl`, tako da svaki korisnik PC-a može osvježiti running copy. |
+| Startup i common desktop shortcut | Napravi se samo ako ne postoji ili pokazuje drugdje. |
+| Log | `C:\Windows\Temp\ArgosyUpdater_Install.log`: verzija, broj kopiranih fileova, broj novih shortcuta, greške. |
 
 Fileovi u Program Files nisu zaključani, jer updater radi iz kopije u `ProgramData`. Nova verzija se pokrene pri sljedećem loginu, ili odmah kad se na shareu osvježi `LastWriteTime` na `\\bepo\ARGOSY\_scripts\_aw_command.txt` (`RESTART`).
 
-Zašto ne GPP **Files**: s akcijom **Update** postojeći file dobije samo nove atribute, sadržaj se ne kopira, pa nova verzija nikad ne bi stigla. **Replace** kopira sve (~10 MB) na svaki refresh svake stanice. Ni jedno ni drugo ne radi shortcute ni prava, dok ih install radi.
+Zašto ne GPP **Files**: s akcijom **Update** postojeći file dobije samo nove atribute, sadržaj se ne kopira, pa nova verzija nikad ne bi stigla. **Replace** kopira sve (~10 MB) na svaki refresh svake stanice. Ni jedno ni drugo ne radi shortcute ni prava.
 
 ## GPO (GPMC)
 
@@ -38,8 +35,8 @@ Zašto ne GPP **Files**: s akcijom **Update** postojeći file dobije samo nove a
 
 | Tab | Postavka |
 |---|---|
-| General | Name `ArgosyUpdater Deploy`, user `NT AUTHORITY\System`, *Run whether user is logged on or not*, *Run with highest privileges*, Configure for Windows 10 |
-| Actions | Start a program: `powershell.exe`, arguments: `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "\\bepo\ArgosyUpdater\Deploy-ArgosyUpdater.ps1"` |
+| General | Name `ArgosyUpdater Install`, user `NT AUTHORITY\System`, *Run whether user is logged on or not*, *Run with highest privileges*, Configure for Windows 10 |
+| Actions | Start a program: `\\bepo\ArgosyUpdater\ArgosyUpdater.exe`, arguments `install` |
 | Settings | *Stop the task if it runs longer than* 30 minutes |
 | Common | **bez** *Apply once and do not reapply*, jer task treba raditi pri svakom refreshu |
 
@@ -48,31 +45,31 @@ GPO se linka na OU s radnim stanicama. Terminal servere (TSPLUS) treba isključi
 ## Preduvjeti
 
 - **Pravo čitanja za račune računala:** na shareu i na NTFS-u `\\bepo\ArgosyUpdater` čitati moraju moći računi računala (Domain Computers ili Authenticated Users), jer task radi kao SYSTEM.
-- **Pravo pisanja samo za admine:** skripta i exe s tog sharea izvršavaju se kao SYSTEM na svim stanicama.
-- **Execution policy:** `MachinePolicy` iz GPO-a (sada `RemoteSigned`) nadjačava `-ExecutionPolicy Bypass`. Nepotpisana skripta s `\\bepo` (Intranet zona) prolazi s `RemoteSigned`. S FQDN putanjom (`\\bepo.du.laus.hr\...`) mogla bi biti blokirana. Najsigurnije je potpisati skriptu internim code signing certifikatom. Na jednoj stanici testiraj prije širenja.
+- **Pravo pisanja samo za admine:** exe s tog sharea izvršava se kao SYSTEM na svim stanicama.
+- **AppLocker / SRP:** ako stanice imaju pravila za exe-ove s mrežnih putanja, `\\bepo\ArgosyUpdater\ArgosyUpdater.exe` mora biti dopušten.
 
 ## Provjera i rollback
 
-- **Na stanici:** log je u `C:\Windows\Temp\ArgosyUpdater_Deploy.log`. Ručni dry-run (kao admin):
-
-  ```powershell
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\bepo\ArgosyUpdater\Deploy-ArgosyUpdater.ps1 -WhatIf
-  ```
-
+- **Na stanici:** log je u `C:\Windows\Temp\ArgosyUpdater_Install.log`. Zadnji rezultat taska vidi se u Task Scheduleru (5 = OK). Ručno, kao admin: `\\bepo\ArgosyUpdater\_ArgosyUpdaterInstall.bat`.
 - **Po stanicama:** verzija je u `dbo.ArgosyUpdaterMachines.ArgosyUpdaterVersion`.
 - **Rollback:** isključi ili unlinkaj GPO. Instalirani fileovi ostaju. Za povratak na staru verziju stavi stari build na share, pa osvježi `_aw_command.txt`.
 
-## Izlazni kodovi skripte
+## Izlazni kodovi `ArgosyUpdater.exe install`
 
 | Kod | Značenje |
 |---|---|
-| 0 | ažurno, ili install uspješan (exit 5) |
-| 1 | install nije vratio 5, robocopy `/L` ≥ 8 ili druga greška |
-| 2 | share nema `ArgosyUpdater.exe`, ništa nije dirano |
+| 5 | OK, i kad nije bilo promjena |
+| -1 | greška, detalji u logu |
+
+## Povijest
+
+| Verzija | Datum | Promjena |
+|---|---|---|
+| 0.1 | 2026-09-29 | GPO Immediate Task s PowerShell skriptom (robocopy) |
+| 0.2 | 2026-09-30 | Bez skripte (blokirana execution policyjem), task izravno pokreće `ArgosyUpdater.exe install`, install je idempotentan |
 
 ## Reference
 
 - [Working with Windows Settings Preference Items (Files extension, actions)](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/dn789188(v=ws.11))
 - [Control Panel Settings preference items (Scheduled Tasks)](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/dn789200(v=ws.11))
 - [about_Execution_Policies](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)
-- [robocopy](https://learn.microsoft.com/windows-server/administration/windows-commands/robocopy)

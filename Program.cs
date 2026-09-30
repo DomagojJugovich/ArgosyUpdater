@@ -177,11 +177,16 @@ namespace ArgosyUpdater
         }
 
       
+        // Install / update from the folder this exe is started from, by hand (_ArgosyUpdaterInstall.bat) or as SYSTEM
+        // from the GPO task on every Group Policy refresh (\\bepo\ArgosyUpdater\ArgosyUpdater.exe install).
+        // Idempotent and cheap when nothing changed: copies only files that differ in size or LastWriteTime,
+        // creates shortcuts only if missing / pointing elsewhere. Files in Program Files are never locked,
+        // the updater runs from its copy in ProgramData.
         private static void InstallApp()
         {
             try
             {
-                Console.WriteLine("AppPath : " + appPath);
+                InstallLog("START install to " + appPath);
                 // no delete , it will be locked
                 if (!Directory.Exists(appPath))
                 {
@@ -191,18 +196,24 @@ namespace ArgosyUpdater
 
                 string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 
-              
-                //copy files
-                DirectoryInfo di = new DirectoryInfo(strExeFilePath);
-                FileInfo[] files = di.GetFiles("*.*");
-
-                foreach (FileInfo file in files)
+                //copy files, started from the installed copy itself there is nothing to copy
+                int copied = 0;
+                if (!String.Equals(Path.GetFullPath(strExeFilePath).TrimEnd('\\'), Path.GetFullPath(appPath).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
-                    string fullFname = Path.Combine(appPath, file.Name);
-                    Console.WriteLine("Copy : " + fullFname);
-                    file.CopyTo(fullFname, true);
-                }
+                    DirectoryInfo di = new DirectoryInfo(strExeFilePath);
+                    FileInfo[] files = di.GetFiles("*.*");
 
+                    foreach (FileInfo file in files)
+                    {
+                        string fullFname = Path.Combine(appPath, file.Name);
+                        var dest = new FileInfo(fullFname);
+                        if (dest.Exists && dest.Length == file.Length && dest.LastWriteTimeUtc == file.LastWriteTimeUtc) continue;
+
+                        Console.WriteLine("Copy : " + fullFname);
+                        file.CopyTo(fullFname, true);
+                        copied++;
+                    }
+                }
 
                 //Program Files: updater only reads there (it runs from its copy in ProgramData), no extra rights.
                 //Older versions gave Everyone FullControl, any user could replace the exe other users start at logon.
@@ -211,14 +222,16 @@ namespace ArgosyUpdater
                 RemoveEveryoneAccess(programData);
                 GrantUsersModify(programData);
 
-                CheckShortcut();
+                int shortcuts = CheckShortcut();
 
-
+                string version = FileVersionInfo.GetVersionInfo(Path.Combine(appPath, "ArgosyUpdater.exe")).FileVersion;
+                InstallLog("END ok, version " + version + ", files copied " + copied + ", shortcuts created " + shortcuts);
 
                 Environment.Exit(5); //INSTALL SUCCESSFULL  dox da je 5
 
             } catch (Exception ex)
             {
+                InstallLog("ERROR " + ex.GetType().Name + ": " + ex.Message);
                 Console.WriteLine("Exception : ");
                 Console.WriteLine(ex.Message);
                 Console.WriteLine(ex.StackTrace);
@@ -230,6 +243,20 @@ namespace ArgosyUpdater
                 }
                 Environment.Exit(-1);
             }
+        }
+
+        // C:\Windows\Temp for SYSTEM (GPO task) and for admins alike, console output of an elevated / scheduled run is not visible
+        private static void InstallLog(string msg)
+        {
+            Console.WriteLine(msg);
+            try
+            {
+                string logFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp", "ArgosyUpdater_Install.log");
+                var fi = new FileInfo(logFile);
+                if (fi.Exists && fi.Length > 1024 * 1024) { File.Copy(logFile, logFile + ".old", true); File.Delete(logFile); }
+                File.AppendAllText(logFile, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + msg + Environment.NewLine);
+            }
+            catch { }
         }
 
 
@@ -324,15 +351,22 @@ namespace ArgosyUpdater
             if (!Directory.Exists(programData)) { Directory.CreateDirectory(programData); }
         }
 
-        private static void CheckShortcut()
+        // startup + common desktop, only when missing or pointing elsewhere (install runs on every GP refresh), returns count created
+        private static int CheckShortcut()
         {
-            Console.WriteLine("CheckShortcut strtup");
-            Extensions.XShortCut.CreateShortCutInStartUpFolder("ArgosyUpdater.exe", appPath, "Argosy updater, maintains local app");
-
-            Console.WriteLine("CheckShortcut desktop");
-            string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "ArgosyWatcher.lnk");
             string fullExe = Path.Combine(appPath, "ArgosyUpdater.exe");
-            Extensions.XShortCut.Create(desktopLink, fullExe, appPath, "Argosy updater, maintains local app");
+            string startupLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup), "ArgosyUpdater.exe-Shortcut.lnk");
+            string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "ArgosyWatcher.lnk");
+            int created = 0;
+
+            foreach (string link in new[] { startupLink, desktopLink })
+            {
+                if (Extensions.XShortCut.PointsTo(link, fullExe)) continue;
+                Console.WriteLine("Shortcut : " + link);
+                Extensions.XShortCut.Create(link, fullExe, appPath, "Argosy updater, maintains local app");
+                created++;
+            }
+            return created;
         }
 
         // settings of the running exe: running copy in ProgramData, or exe folder when started with "debug" (no running copy)

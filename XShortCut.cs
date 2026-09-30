@@ -5,13 +5,12 @@ namespace ArgosyUpdater.Extensions
 {
     public static class XShortCut
     {
-        public static string CreateShortCutInStartUpFolder(string exeName, string startIn, string description)
+        public static bool PointsTo(string fullPathToLink, string fullPathToTargetExe)
         {
-            var startupFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup);
-            var linkPath = startupFolderPath + @"\" + exeName + "-Shortcut.lnk";
-            var targetPath = startIn + @"\" + exeName;
-            Create(linkPath, targetPath, startIn, description);
-            return startupFolderPath;
+            if (!System.IO.File.Exists(fullPathToLink)) return false;
+            var shell = new WshShell();
+            var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink); //loads the existing one
+            return String.Equals(link.TargetPath, fullPathToTargetExe, StringComparison.OrdinalIgnoreCase);
         }
 
 
