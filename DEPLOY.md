@@ -19,11 +19,13 @@ Install je idempotentan i ne košta ništa kad nema promjena:
 
 | Korak | Ponašanje |
 |---|---|
-| Fileovi sharea → `C:\Program Files\ArgosyUpdater_1_0` | Kopiraju se samo fileovi kojima se razlikuje veličina ili `LastWriteTime`. Ništa se ne briše. |
+| Fileovi sharea → `C:\Program Files\ArgosyUpdater_1_0` | Kao robocopy mirror, samo gornja razina: kopiraju se fileovi koji fale ili kojima se razlikuje veličina ili `LastWriteTime`, a brišu fileovi kojih više nema na shareu. Podfolderi se ne diraju. |
 | Prava na `C:\Program Files\ArgosyUpdater_1_0` | Bez dodatnih prava, korisnici samo čitaju. Uklanja se `Everyone: FullControl` koji su dodavale starije verzije. |
 | Prava na `C:\ProgramData\ArgosyWatcher` | `BUILTIN\Users: Modify` (preko SID-a, nasljeđuje se) umjesto `Everyone: FullControl`, tako da svaki korisnik PC-a može osvježiti running copy. |
 | Startup i common desktop shortcut | Napravi se samo ako ne postoji ili pokazuje drugdje. |
-| Log | `C:\Windows\Temp\ArgosyUpdater_Install.log`: verzija, broj kopiranih fileova, broj novih shortcuta, greške. |
+| Log | `C:\Windows\Temp\ArgosyUpdater_Install.log`: verzija, broj kopiranih i obrisanih fileova, broj novih shortcuta, greške. |
+
+Build se na share kopira u cijelosti, ne file po file. Ako GP refresh naiđe dok neki file na shareu privremeno fali, install ga obriše u Program Files, a vrati ga sljedeći refresh.
 
 Fileovi u Program Files nisu zaključani, jer updater radi iz kopije u `ProgramData`. Nova verzija se pokrene pri sljedećem loginu, ili odmah kad se na shareu osvježi `LastWriteTime` na `\\bepo\ARGOSY\_scripts\_aw_command.txt` (`RESTART`).
 

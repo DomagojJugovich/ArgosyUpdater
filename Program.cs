@@ -180,6 +180,7 @@ namespace ArgosyUpdater
         // Install / update from the folder this exe is started from, by hand (_ArgosyUpdaterInstall.bat) or as SYSTEM
         // from the GPO task on every Group Policy refresh (\\bepo\ArgosyUpdater\ArgosyUpdater.exe install).
         // Idempotent and cheap when nothing changed: copies only files that differ in size or LastWriteTime,
+        // deletes files that are gone from the source (top level only, like the copy),
         // creates shortcuts only if missing / pointing elsewhere. The updater runs from its copy in ProgramData,
         // Program Files is locked only while that copy is made at logon / RESTART (copy is retried).
         private static void InstallApp()
@@ -196,8 +197,9 @@ namespace ArgosyUpdater
 
                 string strExeFilePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 
-                //copy files, started from the installed copy itself there is nothing to copy
-                int copied = 0;
+                //mirror top level of the source folder: copy missing / changed, delete what is gone from the source.
+                //started from the installed copy itself there is nothing to do
+                int copied = 0, deleted = 0;
                 if (!String.Equals(Path.GetFullPath(strExeFilePath).TrimEnd('\\'), Path.GetFullPath(appPath).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
                     DirectoryInfo di = new DirectoryInfo(strExeFilePath);
@@ -210,15 +212,23 @@ namespace ArgosyUpdater
                         if (dest.Exists && dest.Length == file.Length && dest.LastWriteTimeUtc == file.LastWriteTimeUtc) continue;
 
                         Console.WriteLine("Copy : " + fullFname);
-                        //ReadOnly comes along from the share and would block the next overwrite
-                        if (dest.Exists && (dest.Attributes & FileAttributes.ReadOnly) != 0) dest.Attributes &= ~FileAttributes.ReadOnly;
-                        //the Program Files exe itself runs ~5 s at every logon / RESTART (before MakeRunningCopy), wait it out
-                        for (int attempt = 1; ; attempt++)
-                        {
-                            try { file.CopyTo(fullFname, true); break; }
-                            catch (IOException) when (attempt < 6) { Thread.Sleep(3000); }
-                        }
+                        ClearReadOnly(dest);
+                        RetryWhileLocked(() => file.CopyTo(fullFname, true));
                         copied++;
+                    }
+
+                    //delete only when the source is a complete build, install from a folder with just the exe must not wipe the rest
+                    var sourceNames = new HashSet<string>(files.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+                    bool completeBuild = sourceNames.Contains("AppSettings.json") && sourceNames.Contains("Octodiff.exe") && sourceNames.Contains("CSScriptLibrary.dll");
+                    if (!completeBuild) InstallLog("source is not a complete build, nothing deleted");
+                    foreach (FileInfo old in completeBuild ? new DirectoryInfo(appPath).GetFiles("*.*") : new FileInfo[0])
+                    {
+                        if (sourceNames.Contains(old.Name)) continue;
+
+                        Console.WriteLine("Delete : " + old.FullName);
+                        ClearReadOnly(old);
+                        RetryWhileLocked(() => old.Delete());
+                        deleted++;
                     }
                 }
 
@@ -232,7 +242,7 @@ namespace ArgosyUpdater
                 int shortcuts = CheckShortcut();
 
                 string version = FileVersionInfo.GetVersionInfo(Path.Combine(appPath, "ArgosyUpdater.exe")).FileVersion;
-                InstallLog("END ok, version " + version + ", files copied " + copied + ", shortcuts created " + shortcuts);
+                InstallLog("END ok, version " + version + ", files copied " + copied + ", deleted " + deleted + ", shortcuts created " + shortcuts);
 
                 Environment.Exit(5); //INSTALL SUCCESSFULL  dox da je 5
 
@@ -249,6 +259,22 @@ namespace ArgosyUpdater
                     Console.WriteLine(ex.InnerException.StackTrace);
                 }
                 Environment.Exit(-1);
+            }
+        }
+
+        //ReadOnly comes along from the share and would block the next overwrite / delete
+        private static void ClearReadOnly(FileInfo fi)
+        {
+            if (fi.Exists && (fi.Attributes & FileAttributes.ReadOnly) != 0) fi.Attributes &= ~FileAttributes.ReadOnly;
+        }
+
+        //the Program Files exe itself runs ~5 s at every logon / RESTART (before MakeRunningCopy), wait it out
+        private static void RetryWhileLocked(Action action)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try { action(); return; }
+                catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException) && attempt < 6) { Thread.Sleep(3000); }
             }
         }
 
