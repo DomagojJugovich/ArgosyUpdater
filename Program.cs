@@ -459,6 +459,7 @@ namespace ArgosyUpdater
                 {
                     string fullFname = Path.Combine(programData, file.Name);
                     Console.WriteLine("Copy : " + fullFname);
+                    ClearReadOnly(new FileInfo(fullFname));
 
                     //ako je config treba ga isprocesirati.
                     if (file.Name == "AppSettings.json")
@@ -473,6 +474,8 @@ namespace ArgosyUpdater
                     }
                 }
 
+                RemoveStaleRunningCopyFiles(files);
+
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.UseShellExecute = false;
                 psi.FileName = Path.Combine(programData, Path.GetFileName(exeName));
@@ -481,6 +484,30 @@ namespace ArgosyUpdater
                 Process.Start(psi);
 
                 Environment.Exit(0);
+            }
+        }
+
+        // files the updater itself writes into ProgramData next to the running copy, never cleaned up
+        private static readonly string[] RunningCopyOwnFiles = { "_SyncChanges.txt", "_Versions.txt", "_SyncErrors.txt", "_AppError.txt", "_DbError.txt", "_lastSync.txt" };
+
+        // running copy mirrors Program Files: files gone from there (removed from the build) are deleted here too.
+        // only when Program Files holds a complete build, a failing delete does not stop the start
+        private static void RemoveStaleRunningCopyFiles(FileInfo[] programFilesFiles)
+        {
+            var names = new HashSet<string>(programFilesFiles.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+            if (!(names.Contains("AppSettings.json") && names.Contains("Octodiff.exe") && names.Contains("CSScriptLibrary.dll"))) return;
+            names.UnionWith(RunningCopyOwnFiles);
+
+            foreach (FileInfo old in new DirectoryInfo(programData).GetFiles("*.*"))
+            {
+                if (names.Contains(old.Name)) continue;
+                try
+                {
+                    Console.WriteLine("Delete : " + old.FullName);
+                    ClearReadOnly(old);
+                    old.Delete();
+                }
+                catch { } //cleaned up on next start
             }
         }
 

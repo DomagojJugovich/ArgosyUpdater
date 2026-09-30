@@ -20,26 +20,32 @@ namespace ArgosyUpdater.Extensions
 
         public static void Create(string fullPathToLink, string fullPathToTargetExe, string startIn, string description)
         {
-            if (System.IO.File.Exists(fullPathToLink)) { System.IO.File.Delete(fullPathToLink); }
-            var shell = new WshShell();
-            var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink);
-            link.IconLocation = fullPathToTargetExe;
-            link.TargetPath = fullPathToTargetExe;
-            link.Description = description;
-            link.WorkingDirectory = startIn;
-            link.Save();
+            Create(fullPathToLink, fullPathToTargetExe, startIn, description, fullPathToTargetExe);
         }
 
+        // new link is saved under a temporary name and only then replaces the old one,
+        // a failing Save (no rights, disk) leaves the existing shortcut in place instead of none
         public static void Create(string fullPathToLink, string fullPathToTargetExe, string startIn, string description, string fullPathToIcon)
         {
-            if (System.IO.File.Exists(fullPathToLink)) { System.IO.File.Delete(fullPathToLink); }
-            var shell = new WshShell();
-            var link = (IWshShortcut)shell.CreateShortcut(fullPathToLink);
-            link.IconLocation = fullPathToIcon;
-            link.TargetPath = fullPathToTargetExe;
-            link.Description = description;
-            link.WorkingDirectory = startIn;
-            link.Save();
+            string tmpLink = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(fullPathToLink), "~" + System.IO.Path.GetFileName(fullPathToLink));
+            try
+            {
+                if (System.IO.File.Exists(tmpLink)) { System.IO.File.Delete(tmpLink); }
+                var shell = new WshShell();
+                var link = (IWshShortcut)shell.CreateShortcut(tmpLink);
+                link.IconLocation = fullPathToIcon;
+                link.TargetPath = fullPathToTargetExe;
+                link.Description = description;
+                link.WorkingDirectory = startIn;
+                link.Save();
+
+                if (System.IO.File.Exists(fullPathToLink)) { System.IO.File.Replace(tmpLink, fullPathToLink, null); }
+                else { System.IO.File.Move(tmpLink, fullPathToLink); }
+            }
+            finally
+            {
+                try { if (System.IO.File.Exists(tmpLink)) { System.IO.File.Delete(tmpLink); } } catch { }
+            }
         }
     }
 }
