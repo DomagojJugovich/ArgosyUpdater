@@ -1450,6 +1450,7 @@ namespace ArgosyUpdater
                     if (!File.Exists(temppath)) //ako ne postoji na sourceu obrisi ju i lokalno
                     {
                          changes.AppendLine("DELETE MISSING FILE : " + file.FullName);
+                         ClearReadOnly(file); //File.Delete fails on read-only files
                          file.Delete();
                     }
                 }
@@ -1474,7 +1475,8 @@ namespace ArgosyUpdater
                     if (!Directory.Exists(temppathDir)) //ako ne postoji na sourceu obrisi ju i lokalno
                     {
                         changes.AppendLine("DELETE MISSING FOLDER : " + subdir.FullName);
-                        subdir.Delete(true);
+                        //clears read-only files first (Directory.Delete fails on them), works beyond MAX_PATH too
+                        Delta.DeltaIO.DeleteDirectory(subdir.FullName);
  
                     } else
                     {
@@ -1484,7 +1486,8 @@ namespace ArgosyUpdater
                 }
                 catch (Exception ex)
                 {
-                    AddError(ex, errors, temppathDir, sourceDirName);
+                    //PATH1 local, PATH2 share, like everywhere else
+                    AddError(ex, errors, subdir.FullName, temppathDir);
                     continue;
                 }
             }
